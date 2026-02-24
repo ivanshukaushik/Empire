@@ -104,7 +104,8 @@ export function createInitialState(seed: number, playerKingdomId: string): GameS
     loseReason: null,
     selectedProvinceId: null,
     actionBeingPlanned: null,
-    pendingMoveSource: null,
+    pendingMoveArmyId: null,
+    helpSeen: false,
   };
 
   // Attach the RNG (re-created from seed each load)

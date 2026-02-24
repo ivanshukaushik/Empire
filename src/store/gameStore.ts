@@ -10,11 +10,9 @@ import { createRng } from '../engine/rng';
 // ============================================================
 
 interface GameStore {
-  // Game state
   gameState: GameState | null;
   actionFeedback: string | null;
 
-  // Actions
   newGame: (seed: number, playerKingdomId: string) => void;
   queueAction: (action: Omit<PlayerAction, 'id'>) => void;
   endTurn: () => void;
@@ -23,9 +21,11 @@ interface GameStore {
   loadGame: () => boolean;
   setSelectedProvince: (provinceId: string | null) => void;
   setActionBeingPlanned: (actionType: ActionType | null) => void;
-  setPendingMoveSource: (armyId: string | null) => void;
+  /** Store the army ID that is currently being moved or attacking */
+  setPendingMoveArmy: (armyId: string | null) => void;
   clearFeedback: () => void;
   resetGame: () => void;
+  dismissHelp: () => void;
 }
 
 const SAVE_KEY = 'warring-states-v1-save';
@@ -37,7 +37,6 @@ export const useGameStore = create<GameStore>()(
 
     newGame: (seed, playerKingdomId) => {
       const state = createInitialState(seed, playerKingdomId);
-      // Attach RNG separately (not serialisable)
       set({ gameState: state, actionFeedback: null });
     },
 
@@ -57,8 +56,9 @@ export const useGameStore = create<GameStore>()(
         return;
       }
 
-      // Apply the action immediately (real-time feedback)
-      const rng = createRng(gameState.seed + gameState.season * 100 + gameState.actionPointsRemaining);
+      const rng = createRng(
+        gameState.seed + gameState.season * 100 + gameState.actionPointsRemaining
+      );
       const { newState, message } = applyPlayerAction(action, gameState, rng);
 
       set({
@@ -66,8 +66,7 @@ export const useGameStore = create<GameStore>()(
           ...newState,
           pendingPlayerActions: [...newState.pendingPlayerActions, action],
           actionBeingPlanned: null,
-          pendingMoveSource: null,
-          selectedProvinceId: newState.selectedProvinceId,
+          pendingMoveArmyId: null,
           turnLog: [
             ...newState.turnLog,
             {
@@ -87,9 +86,15 @@ export const useGameStore = create<GameStore>()(
       if (!gameState) return;
       if (gameState.phase !== 'player_planning') return;
 
-      set({ gameState: { ...gameState, phase: 'executing' } });
+      set({
+        gameState: {
+          ...gameState,
+          phase: 'executing',
+          actionBeingPlanned: null,
+          pendingMoveArmyId: null,
+        },
+      });
 
-      // Execute asynchronously to allow UI to update
       setTimeout(() => {
         const { gameState: current } = get();
         if (!current) return;
@@ -103,11 +108,8 @@ export const useGameStore = create<GameStore>()(
       if (!gameState) return;
       if (gameState.phase === 'season_summary') {
         set({
-          gameState: {
-            ...gameState,
-            phase: 'player_planning',
-            seasonSummary: null,
-          },
+          gameState: { ...gameState, phase: 'player_planning', seasonSummary: null },
+          actionFeedback: null,
         });
       }
     },
@@ -116,12 +118,10 @@ export const useGameStore = create<GameStore>()(
       const { gameState } = get();
       if (!gameState) return;
       try {
-        const save = {
-          version: '1.0',
-          savedAt: new Date().toISOString(),
-          state: gameState,
-        };
-        localStorage.setItem(SAVE_KEY, JSON.stringify(save));
+        localStorage.setItem(
+          SAVE_KEY,
+          JSON.stringify({ version: '1.0', savedAt: new Date().toISOString(), state: gameState })
+        );
       } catch (e) {
         console.error('Save failed:', e);
       }
@@ -150,21 +150,25 @@ export const useGameStore = create<GameStore>()(
       set((draft) => {
         if (draft.gameState) {
           draft.gameState.actionBeingPlanned = actionType;
-          if (actionType === null) {
-            draft.gameState.pendingMoveSource = null;
-          }
+          if (actionType === null) draft.gameState.pendingMoveArmyId = null;
         }
       });
     },
 
-    setPendingMoveSource: (armyId) => {
+    setPendingMoveArmy: (armyId) => {
       set((draft) => {
-        if (draft.gameState) draft.gameState.pendingMoveSource = armyId;
+        if (draft.gameState) draft.gameState.pendingMoveArmyId = armyId;
       });
     },
 
     clearFeedback: () => set({ actionFeedback: null }),
 
     resetGame: () => set({ gameState: null, actionFeedback: null }),
+
+    dismissHelp: () => {
+      set((draft) => {
+        if (draft.gameState) draft.gameState.helpSeen = true;
+      });
+    },
   }))
 );

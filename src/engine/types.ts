@@ -208,5 +208,6 @@ export interface GameState {
   loseReason: string | null;
   selectedProvinceId: string | null;
   actionBeingPlanned: ActionType | null;
-  pendingMoveSource: string | null; // army id being moved
+  pendingMoveArmyId: string | null; // ID of the army being moved or attacking
+  helpSeen: boolean; // has the player dismissed the first-play help overlay
 }
