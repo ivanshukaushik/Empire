@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useGameStore } from '../store/gameStore';
 import { KINGDOM_DEFS } from '../data/gameData';
+import { resolveSeed } from '../config';
 
 const KINGDOM_EMOJI: Record<string, string> = {
   qin: '🏛',
@@ -15,15 +16,15 @@ const KINGDOM_EMOJI: Record<string, string> = {
 
 export default function GameSetup() {
   const [selected, setSelected] = useState<string>('');
-  const [seed, setSeed] = useState<string>(String(Math.floor(Math.random() * 999999)));
-  const [hasSave, setHasSave] = useState(() => !!localStorage.getItem('warring-states-v1-save'));
+  const [hasSave, setHasSave] = useState(
+    () => !!(localStorage.getItem('warring-states-v2-save') ?? localStorage.getItem('warring-states-v1-save'))
+  );
   const newGame = useGameStore((s) => s.newGame);
   const loadGame = useGameStore((s) => s.loadGame);
 
   function start() {
     if (!selected) return;
-    const s = parseInt(seed) || Date.now() % 999999;
-    newGame(s, selected);
+    newGame(resolveSeed(), selected);
   }
 
   function resume() {
@@ -78,23 +79,6 @@ export default function GameSetup() {
         })}
       </div>
 
-      {/* Seed */}
-      <div className="flex items-center gap-3 mb-6">
-        <label className="text-sm text-gray-400">Seed:</label>
-        <input
-          type="number"
-          value={seed}
-          onChange={(e) => setSeed(e.target.value)}
-          className="bg-gray-800 border border-gray-600 rounded px-3 py-1 text-sm text-gray-200 w-32"
-        />
-        <button
-          className="btn-ghost text-xs"
-          onClick={() => setSeed(String(Math.floor(Math.random() * 999999)))}
-        >
-          Random
-        </button>
-      </div>
-
       {/* Start */}
       <button
         className={`btn-primary px-8 py-3 text-base ${!selected ? 'opacity-50 cursor-not-allowed' : ''}`}
@@ -106,7 +90,8 @@ export default function GameSetup() {
 
       {/* How to play hint */}
       <p className="text-gray-600 text-xs mt-6 text-center max-w-md">
-        Click a province on the map to select it. Use the Action Bar to spend your 3 Action Points each season.
+        Each season you receive 2 Orders for campaign actions (Move, Attack, Espionage, Diplomacy, Reform).
+        Build and Recruit are free but each province can only do one per season.
         Win by controlling 60% of provinces or capturing 3 enemy capitals.
       </p>
     </div>

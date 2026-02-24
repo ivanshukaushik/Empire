@@ -6,6 +6,8 @@ import {
   LogEntry,
   Army,
   Province,
+  ActionType,
+  DiploProposal,
 } from './types';
 import { createRng, rollFloat } from './rng';
 import { resolveBattle, AttackOrder } from './combat';
@@ -17,28 +19,37 @@ import { recomputeFog } from './initialState';
 import { aiPlanTurn } from '../ai/aiAgent';
 
 // ============================================================
-// ACTION COSTS
+// ACTION CLASSIFICATION
 // ============================================================
-export const ACTION_AP_COSTS: Record<string, number> = {
-  build: 1,
-  recruit: 1,
-  move: 1,
-  attack: 1,
-  diplomacy_nap: 1,
-  diplomacy_tribute: 1,
-  espionage_scout: 1,
-  espionage_sabotage: 2,
-  espionage_incite: 2,
-  reform: 1,
-};
 
-// Qin pays +1 AP for all diplomacy
-function adjustedApCost(action: PlayerAction, kingdomId: string): number {
-  const base = ACTION_AP_COSTS[action.type] ?? 1;
+/**
+ * Campaign actions cost 1 Order each.
+ * Move and Attack additionally consume the army's campaign slot for the season.
+ */
+const CAMPAIGN_ACTIONS = new Set<ActionType>([
+  'move', 'attack',
+  'diplomacy_nap', 'diplomacy_tribute',
+  'espionage_scout', 'espionage_sabotage', 'espionage_incite',
+  'reform',
+]);
+
+/**
+ * Domestic actions cost 0 Orders but consume the province's domestic slot.
+ * Only one domestic action per province per season.
+ */
+const DOMESTIC_ACTIONS = new Set<ActionType>(['build', 'recruit']);
+
+export function isCampaignAction(type: ActionType): boolean {
+  return CAMPAIGN_ACTIONS.has(type);
+}
+
+// Qin pays +1 Order for all diplomacy actions
+function adjustedOrderCost(action: PlayerAction, kingdomId: string): number {
+  if (!isCampaignAction(action.type)) return 0; // domestic: free
   if (kingdomId === 'qin' && (action.type === 'diplomacy_nap' || action.type === 'diplomacy_tribute')) {
-    return base + 1;
+    return 2;
   }
-  return base;
+  return 1;
 }
 
 const SEASON_NAMES = ['Winter', 'Spring', 'Summer', 'Autumn'];
@@ -51,12 +62,35 @@ export function validateAction(
   state: GameState
 ): { valid: boolean; reason: string } {
   const kid = state.playerKingdomId;
-  const apCost = adjustedApCost(action, kid);
-  if (state.actionPointsRemaining < apCost) {
-    return { valid: false, reason: `Not enough AP (need ${apCost}, have ${state.actionPointsRemaining}).` };
+  const kingdom = state.kingdoms[kid];
+  const orderCost = adjustedOrderCost(action, kid);
+
+  // ── Orders check (campaign actions only) ─────────────────
+  if (isCampaignAction(action.type)) {
+    if (state.ordersRemaining < orderCost) {
+      const extra = orderCost > 1 ? ` (Qin diplomacy costs ${orderCost})` : '';
+      return { valid: false, reason: `No Orders remaining this season${extra}. End Season to refresh.` };
+    }
   }
 
-  const kingdom = state.kingdoms[kid];
+  // ── Domestic slot check (build/recruit) ───────────────────
+  if (DOMESTIC_ACTIONS.has(action.type)) {
+    const pid = action.provinceId;
+    if (pid && state.provinceDomesticUsed[pid]) {
+      return {
+        valid: false,
+        reason: `${state.provinces[pid]?.name ?? 'This province'} has already used its domestic action this season.`,
+      };
+    }
+  }
+
+  // ── Per-army campaign slot check (move/attack) ────────────
+  if (action.type === 'move' || action.type === 'attack') {
+    if (action.armyId && state.armyCampaignUsed[action.armyId]) {
+      const armyName = state.armies[action.armyId]?.name ?? 'This army';
+      return { valid: false, reason: `${armyName} has already acted this season.` };
+    }
+  }
 
   switch (action.type) {
     case 'build': {
@@ -65,7 +99,7 @@ export function validateAction(
       if (!p || p.owner !== kid) return { valid: false, reason: 'You do not own that province.' };
       if (!action.buildingType) return { valid: false, reason: 'No building type selected.' };
       const cost = buildCost(action.buildingType, kingdom);
-      if (kingdom.treasury < cost.gold) return { valid: false, reason: `Need ${cost.gold} gold.` };
+      if (kingdom.treasury < cost.gold) return { valid: false, reason: `Need ${cost.gold} gold (have ${Math.floor(kingdom.treasury)}).` };
       if (kingdom.food < cost.food) return { valid: false, reason: `Need ${cost.food} food.` };
       if (action.buildingType === 'fort' && p.fortLevel >= 3) return { valid: false, reason: 'Fort already at max level.' };
       if (action.buildingType === 'farm' && p.hasFarm) return { valid: false, reason: 'Farm already built.' };
@@ -78,11 +112,11 @@ export function validateAction(
       const p = state.provinces[action.provinceId];
       if (!p || p.owner !== kid) return { valid: false, reason: 'You do not own that province.' };
       const canRecruit = p.hasBarracks || p.isCapital || (kid === 'qi'); // Qi can recruit anywhere
-      if (!canRecruit) return { valid: false, reason: 'No barracks in this province.' };
+      if (!canRecruit) return { valid: false, reason: 'No barracks in this province (build one first, or use capital).' };
       if (!action.recruitAmount || action.recruitAmount <= 0) return { valid: false, reason: 'Invalid recruit amount.' };
       const cost = recruitCost(action.recruitAmount, kingdom);
-      if (kingdom.treasury < cost.gold) return { valid: false, reason: `Need ${cost.gold} gold.` };
-      if (kingdom.manpower < action.recruitAmount) return { valid: false, reason: `Need ${action.recruitAmount} manpower.` };
+      if (kingdom.treasury < cost.gold) return { valid: false, reason: `Need ${cost.gold} gold (have ${Math.floor(kingdom.treasury)}).` };
+      if (kingdom.manpower < action.recruitAmount) return { valid: false, reason: `Need ${action.recruitAmount} manpower (have ${Math.floor(kingdom.manpower)}).` };
       return { valid: true, reason: '' };
     }
     case 'move': {
@@ -160,11 +194,28 @@ export function applyPlayerAction(
   rng: () => number
 ): { newState: GameState; message: string; battleResult?: BattleResult } {
   const kid = state.playerKingdomId;
-  const apCost = adjustedApCost(action, kid);
-  let newState = {
-    ...state,
-    actionPointsRemaining: state.actionPointsRemaining - apCost,
-  };
+  const orderCost = adjustedOrderCost(action, kid);
+
+  // Deduct orders for campaign actions
+  let newState: GameState = isCampaignAction(action.type)
+    ? { ...state, ordersRemaining: state.ordersRemaining - orderCost }
+    : { ...state };
+
+  // Mark per-army campaign used
+  if ((action.type === 'move' || action.type === 'attack') && action.armyId) {
+    newState = {
+      ...newState,
+      armyCampaignUsed: { ...newState.armyCampaignUsed, [action.armyId]: true },
+    };
+  }
+
+  // Mark province domestic slot used
+  if (DOMESTIC_ACTIONS.has(action.type) && action.provinceId) {
+    newState = {
+      ...newState,
+      provinceDomesticUsed: { ...newState.provinceDomesticUsed, [action.provinceId]: true },
+    };
+  }
 
   const newKingdoms = { ...newState.kingdoms };
   const newProvinces = { ...newState.provinces };
@@ -190,7 +241,7 @@ export function applyPlayerAction(
         case 'fort':    updatedProv.fortLevel  = Math.min(3, p.fortLevel + 1); break;
       }
       newProvinces[action.provinceId!] = updatedProv;
-      message = `Built ${action.buildingType} in ${p.name}. Cost: ${cost.gold} gold, ${cost.food} food.`;
+      message = `Built ${action.buildingType} in ${p.name}. Cost: ${cost.gold} gold.`;
       break;
     }
 
@@ -290,7 +341,7 @@ export function applyPlayerAction(
         k.stability = Math.max(0, k.stability - 10);
       }
       newKingdoms[kid] = k;
-      message = `Reform enacted: ${action.reform?.replace('_', ' ')}.`;
+      message = `Reform enacted: ${action.reform?.replace(/_/g, ' ')}.`;
       break;
     }
 
@@ -444,6 +495,18 @@ export function executeTurn(state: GameState): GameState {
     }
   }
 
+  // --- Phase 3: Generate AI diplomacy proposals for player inbox ---
+  const newProposals = generateAIProposals(s, rng);
+  if (newProposals.length > 0) {
+    // Keep existing inbox + add new (max 5 total)
+    const combined = [...s.diplomaticInbox, ...newProposals].slice(-5);
+    s = { ...s, diplomaticInbox: combined };
+    for (const prop of newProposals) {
+      const fromName = s.kingdoms[prop.fromKingdomId]?.name ?? prop.fromKingdomId;
+      summary.diplomaticLines.push(`${fromName} sent a diplomatic proposal.`);
+    }
+  }
+
   // --- Phase 4: Economy ---
   const econResult = economyPhase(s);
   s = econResult.newState;
@@ -483,7 +546,10 @@ export function executeTurn(state: GameState): GameState {
       season: newSeason,
       year: newYear,
       phase: 'season_summary',
-      actionPointsRemaining: state.maxActionPoints,
+      // Reset Orders, domestic slots, and army campaign slots for next season
+      ordersRemaining: s.maxOrders,
+      provinceDomesticUsed: {},
+      armyCampaignUsed: {},
       pendingPlayerActions: [],
       fogOfWar: newFog,
       seasonSummary: summary,
@@ -491,6 +557,117 @@ export function executeTurn(state: GameState): GameState {
   }
 
   return s;
+}
+
+// ============================================================
+// AI DIPLOMACY PROPOSAL GENERATION
+// ============================================================
+
+function generateAIProposals(state: GameState, rng: () => number): DiploProposal[] {
+  const proposals: DiploProposal[] = [];
+  const playerKid = state.playerKingdomId;
+  const playerProvCount = Object.values(state.provinces).filter((p) => p.owner === playerKid).length;
+
+  // Set of province IDs where the player has armies (potential threat indicators)
+  const playerArmyProvIds = new Set(
+    Object.values(state.armies)
+      .filter((a) => a.kingdomId === playerKid)
+      .map((a) => a.provinceId)
+  );
+
+  for (const kingdom of Object.values(state.kingdoms)) {
+    if (kingdom.isPlayer || kingdom.isEliminated) continue;
+    if (proposals.length >= 3) break; // cap at 3 proposals per season
+
+    const rel = state.relations[kingdom.id]?.[playerKid];
+    if (!rel) continue;
+    // Skip if NAP already in place
+    if (rel.treaty?.type === 'nap') continue;
+
+    const aiProvCount = Object.values(state.provinces).filter((p) => p.owner === kingdom.id).length;
+
+    // Check if any player army is in a province adjacent to this AI's territory
+    const aiProvinces = Object.values(state.provinces).filter((p) => p.owner === kingdom.id);
+    const isPlayerThreatening = aiProvinces.some((p) =>
+      p.adjacentTo.some((adj) => playerArmyProvIds.has(adj))
+    );
+
+    // Compute base proposal chance
+    let proposalChance = 0.12; // 12% baseline per season
+    if (isPlayerThreatening && rel.score < 0) proposalChance = 0.50;
+    else if (playerProvCount > aiProvCount * 1.5) proposalChance = 0.30;
+    else if (rel.score > 15) proposalChance = 0.20; // friendly kingdoms reach out more
+
+    if (rng() > proposalChance) continue;
+
+    const propId = `dp_${kingdom.id}_s${state.season}_${Math.floor(rng() * 9999)}`;
+
+    if (isPlayerThreatening && aiProvCount <= playerProvCount) {
+      // Threatened and not dominant — propose peace
+      if (rng() < 0.55) {
+        proposals.push({
+          id: propId,
+          fromKingdomId: kingdom.id,
+          type: 'nap_offer',
+          terms: `${kingdom.name} seeks stability on its borders and proposes a Non-Aggression Pact lasting 8 seasons.`,
+          season: state.season,
+        });
+      } else {
+        // Offer tribute (AI pays player) to avoid conflict
+        const amt = 5 + Math.floor(rng() * 15);
+        proposals.push({
+          id: propId,
+          fromKingdomId: kingdom.id,
+          type: 'tribute_demand',
+          terms: `${kingdom.name} offers ${amt} gold per season in tribute, hoping to forestall war.`,
+          tributeAmount: amt,
+          season: state.season,
+        });
+      }
+    } else if (rel.score > 10 && !isPlayerThreatening) {
+      // Relatively friendly — look for a mutual target pact
+      const mutualEnemies = Object.values(state.kingdoms).filter((k) => {
+        if (k.isPlayer || k.isEliminated || k.id === kingdom.id) return false;
+        const aiRel = state.relations[kingdom.id]?.[k.id];
+        const playerRel = state.relations[playerKid]?.[k.id];
+        return (aiRel?.score ?? 0) < -20 && (playerRel?.score ?? 0) < -20;
+      });
+
+      if (mutualEnemies.length > 0) {
+        const target = mutualEnemies[Math.floor(rng() * mutualEnemies.length)];
+        proposals.push({
+          id: propId,
+          fromKingdomId: kingdom.id,
+          type: 'mutual_target',
+          terms: `${kingdom.name} proposes a coordinated campaign against ${target.name}. They will prioritize attacking ${target.name} this season.`,
+          targetKingdomId: target.id,
+          season: state.season,
+        });
+      } else {
+        // Plain NAP offer
+        proposals.push({
+          id: propId,
+          fromKingdomId: kingdom.id,
+          type: 'nap_offer',
+          terms: `${kingdom.name} believes mutual restraint serves both kingdoms. They propose a Non-Aggression Pact.`,
+          season: state.season,
+        });
+      }
+    } else if (rel.score < -30 && playerProvCount < aiProvCount) {
+      // AI is dominant and hostile — demand tribute
+      const amt = 10 + Math.floor(rng() * 20);
+      proposals.push({
+        id: propId,
+        fromKingdomId: kingdom.id,
+        type: 'tribute_demand',
+        terms: `${kingdom.name} demands ${amt} gold per season in tribute or they will consider war.`,
+        tributeAmount: amt,
+        season: state.season,
+      });
+    }
+  }
+
+  return proposals;
 }
 
 // ============================================================
@@ -539,3 +716,5 @@ function isAdjacent(
 }
 
 export { SEASON_NAMES };
+// Export so UI can check which actions cost orders
+export { CAMPAIGN_ACTIONS, DOMESTIC_ACTIONS };

@@ -40,7 +40,7 @@ export default function ProvinceInfo() {
   const rel        = gameState.relations[gameState.playerKingdomId]?.[province.owner];
   const hasNAP     = rel?.treaty?.type === 'nap';
   const isPlanning = gameState.phase === 'player_planning';
-  const ap         = gameState.actionPointsRemaining;
+  const ap         = gameState.ordersRemaining;
 
   const armiesHere      = Object.values(gameState.armies).filter((a) => a.provinceId === pid);
   const playerArmiesHere = armiesHere.filter((a) => a.kingdomId === gameState.playerKingdomId);
@@ -340,7 +340,7 @@ function RecruitWidget({ provinceId }: { provinceId: string }) {
   const queueAction = useGameStore((s) => s.queueAction);
   const gameState   = useGameStore((s) => s.gameState!);
   const player      = gameState.kingdoms[gameState.playerKingdomId];
-  const ap          = gameState.actionPointsRemaining;
+  const ap          = gameState.ordersRemaining;
   const troops      = amount * 10;
   const goldCost    = Math.ceil(amount * 2 * player.recruitCostModifier);
 

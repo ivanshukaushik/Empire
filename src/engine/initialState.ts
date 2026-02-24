@@ -13,6 +13,7 @@ import {
   ARMY_DEFS,
   STARTING_FORTS,
 } from '../data/gameData';
+import { DEFAULT_MAX_ORDERS } from '../config';
 
 // ============================================================
 // BUILD INITIAL GAME STATE
@@ -93,8 +94,10 @@ export function createInitialState(seed: number, playerKingdomId: string): GameS
     armies,
     relations,
     playerKingdomId,
-    actionPointsRemaining: 3,
-    maxActionPoints: 3,
+    ordersRemaining: DEFAULT_MAX_ORDERS,
+    maxOrders: DEFAULT_MAX_ORDERS,
+    provinceDomesticUsed: {},
+    armyCampaignUsed: {},
     pendingPlayerActions: [],
     fogOfWar,
     turnLog: [],
@@ -106,6 +109,7 @@ export function createInitialState(seed: number, playerKingdomId: string): GameS
     actionBeingPlanned: null,
     pendingMoveArmyId: null,
     helpSeen: false,
+    diplomaticInbox: [],
   };
 
   // Attach the RNG (re-created from seed each load)

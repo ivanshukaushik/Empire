@@ -4,11 +4,11 @@ import { ReformType } from '../engine/types';
 import { Tooltip } from './Tooltip';
 
 const REFORM_OPTIONS: { id: ReformType; label: string; bonus: string; penalty: string }[] = [
-  { id: 'iron_fist',       label: 'Iron Fist',       bonus: 'Combat +20%',       penalty: 'Economy −10%' },
-  { id: 'commerce',        label: 'Commerce',         bonus: 'Income +20%',       penalty: 'Upkeep +10%' },
-  { id: 'conscription',    label: 'Conscription',     bonus: 'Manpower +30%',     penalty: 'Stability −10 (once)' },
-  { id: 'propaganda',      label: 'Propaganda',       bonus: '+3 stability/season',penalty: '−5 gold/season' },
-  { id: 'fortify_borders', label: 'Fortify Borders',  bonus: 'Fort cost −30%',    penalty: 'Recruit −15%' },
+  { id: 'iron_fist',       label: 'Iron Fist',       bonus: 'Combat +20%',        penalty: 'Economy −10%' },
+  { id: 'commerce',        label: 'Commerce',         bonus: 'Income +20%',        penalty: 'Upkeep +10%' },
+  { id: 'conscription',    label: 'Conscription',     bonus: 'Manpower +30%',      penalty: 'Stability −10 (once)' },
+  { id: 'propaganda',      label: 'Propaganda',       bonus: '+3 stability/season', penalty: '−5 gold/season' },
+  { id: 'fortify_borders', label: 'Fortify Borders',  bonus: 'Fort cost −30%',     penalty: 'Recruit −15%' },
 ];
 
 export default function ActionBar() {
@@ -25,7 +25,11 @@ export default function ActionBar() {
   const [tributeTarget, setTributeTarget] = useState('');
   const [tributeAmount, setTributeAmount] = useState(20);
 
-  const { actionPointsRemaining: ap, phase, playerKingdomId, kingdoms, actionBeingPlanned } = gameState;
+  const {
+    ordersRemaining: orders, phase, playerKingdomId, kingdoms,
+    actionBeingPlanned, provinceDomesticUsed, armyCampaignUsed,
+  } = gameState;
+
   const isPlanning  = phase === 'player_planning';
   const isQin       = playerKingdomId === 'qin';
   const player      = kingdoms[playerKingdomId];
@@ -33,19 +37,32 @@ export default function ActionBar() {
   const selectedProv = pid ? gameState.provinces[pid] : null;
   const isOwnProv   = selectedProv?.owner === playerKingdomId;
   const isEnemyProv = selectedProv && selectedProv.owner !== playerKingdomId;
+  const hasOrders   = orders > 0;
+  const hasDiploOrders = isQin ? orders >= 2 : orders >= 1;
 
   const otherKingdoms = Object.values(kingdoms).filter(
     (k) => k.id !== playerKingdomId && !k.isEliminated
   );
 
+  // Check if selected province has used its domestic slot
+  const provDomesticUsed = !!(pid && provinceDomesticUsed?.[pid]);
+
+  // Check if player army in selected province has already acted
+  const armyInProv = pid
+    ? Object.values(gameState.armies).find(
+        (a) => a.kingdomId === playerKingdomId && a.provinceId === pid && a.size > 0
+      )
+    : null;
+  const armyActed = !!(armyInProv && armyCampaignUsed?.[armyInProv.id]);
+
   function startAttack() {
-    if (!isPlanning || ap < 1) return;
+    if (!isPlanning || !hasOrders) return;
     setAction('attack');
     setPendingMoveArmy(null);
   }
 
   function startMove() {
-    if (!isPlanning || ap < 1) return;
+    if (!isPlanning || !hasOrders) return;
     setAction('move');
     setPendingMoveArmy(null);
   }
@@ -67,6 +84,30 @@ export default function ActionBar() {
   const isMove   = actionBeingPlanned === 'move';
   const isBusy   = !!actionBeingPlanned;
 
+  // ── Derived disable reasons ──────────────────────────────
+  const noOrdersTip       = 'No Orders remaining this season — end season to refresh';
+  const noProvTip         = 'Select one of your provinces first';
+  const noEnemyProvTip    = 'Select an enemy province first';
+  const domUsedTip        = `${selectedProv?.name ?? 'This province'} already used its domestic action this season`;
+  const armyActedTip      = `${armyInProv?.name ?? 'Army'} already acted this season`;
+  const noBarracksTip     = 'Build a barracks first (or use your capital)';
+
+  const canBuild  = isPlanning && isOwnProv && !provDomesticUsed;
+  const canRecruit = isPlanning && isOwnProv && !provDomesticUsed
+    && !!(selectedProv?.hasBarracks || selectedProv?.isCapital || playerKingdomId === 'qi');
+
+  const buildDisableReason = !isPlanning ? '' : !isOwnProv ? noProvTip : provDomesticUsed ? domUsedTip : '';
+  const recruitDisableReason = !isPlanning ? '' : !isOwnProv ? noProvTip
+    : provDomesticUsed ? domUsedTip
+    : !(selectedProv?.hasBarracks || selectedProv?.isCapital || playerKingdomId === 'qi') ? noBarracksTip
+    : '';
+
+  const attackDisableReason = !isPlanning ? '' : !hasOrders ? noOrdersTip : '';
+  const moveDisableReason   = !isPlanning ? '' : !hasOrders ? noOrdersTip : '';
+  const scoutDisableReason  = !isPlanning ? '' : !hasOrders ? noOrdersTip : !isEnemyProv ? noEnemyProvTip : '';
+  const sabDisableReason    = !isPlanning ? '' : !hasOrders ? noOrdersTip : !isEnemyProv ? noEnemyProvTip : '';
+  const diploDisableReason  = !isPlanning ? '' : !hasDiploOrders ? (isQin ? 'Qin diplomacy costs 2 Orders' : noOrdersTip) : '';
+
   return (
     <div className="h-full flex items-center px-3 gap-1.5 overflow-x-auto">
 
@@ -74,26 +115,26 @@ export default function ActionBar() {
       <Group label="Military">
         <Btn
           label="⚔ Attack"
-          tip="Attack adjacent enemy province (1 AP) — A"
+          tip={attackDisableReason || `Attack adjacent enemy province (1 Order) — A`}
           active={isAttack}
           danger
-          disabled={!isPlanning || ap < 1}
+          disabled={!isPlanning || !hasOrders}
           onClick={isAttack ? cancel : startAttack}
         />
         <Btn
           label="⇒ Move"
-          tip="Move army to friendly province (1 AP) — M"
+          tip={moveDisableReason || `Move army to friendly province (1 Order) — M`}
           active={isMove}
-          disabled={!isPlanning || ap < 1}
+          disabled={!isPlanning || !hasOrders}
           onClick={isMove ? cancel : startMove}
         />
         <Btn
           label="🪖 Recruit"
-          tip="Recruit 30 troops at selected province (1 AP) — R"
-          disabled={!isPlanning || ap < 1 || !isOwnProv || !(selectedProv?.hasBarracks || selectedProv?.isCapital)}
+          tip={recruitDisableReason || `Recruit 30 troops — free, uses province domestic slot — R`}
+          disabled={!canRecruit}
           onClick={() => {
             if (!pid || !isOwnProv) return;
-            queueAction({ type: 'recruit', apCost: 1, provinceId: pid, recruitAmount: 3 });
+            queueAction({ type: 'recruit', apCost: 0, provinceId: pid, recruitAmount: 3 });
           }}
         />
       </Group>
@@ -101,23 +142,26 @@ export default function ActionBar() {
       <Divider />
 
       {/* ── Build ────────────────────────────── */}
-      <Group label="Build">
-        <Btn label="🌱 Farm"   tip="Build farm in selected province +2 food/season (1 AP)"
-          disabled={!isPlanning || ap < 1 || !isOwnProv || !!selectedProv?.hasFarm}
-          onClick={() => pid && queueAction({ type: 'build', apCost: 1, provinceId: pid, buildingType: 'farm' })}
+      <Group label="Build (free)">
+        <Btn label="🌱 Farm"
+          tip={buildDisableReason || (selectedProv?.hasFarm ? 'Farm already built' : 'Build farm +2 food/season — free, uses province slot')}
+          disabled={!canBuild || !!selectedProv?.hasFarm}
+          onClick={() => pid && queueAction({ type: 'build', apCost: 0, provinceId: pid, buildingType: 'farm' })}
         />
-        <Btn label="🏪 Market" tip="Build market +2 income/season (1 AP)"
-          disabled={!isPlanning || ap < 1 || !isOwnProv || !!selectedProv?.hasMarket}
-          onClick={() => pid && queueAction({ type: 'build', apCost: 1, provinceId: pid, buildingType: 'market' })}
+        <Btn label="🏪 Market"
+          tip={buildDisableReason || (selectedProv?.hasMarket ? 'Market already built' : 'Build market +2 income/season — free, uses province slot')}
+          disabled={!canBuild || !!selectedProv?.hasMarket}
+          onClick={() => pid && queueAction({ type: 'build', apCost: 0, provinceId: pid, buildingType: 'market' })}
         />
-        <Btn label="🪖 Barracks" tip="Build barracks +1 manpower/season, cheaper recruit (1 AP)"
-          disabled={!isPlanning || ap < 1 || !isOwnProv || !!selectedProv?.hasBarracks}
-          onClick={() => pid && queueAction({ type: 'build', apCost: 1, provinceId: pid, buildingType: 'barracks' })}
+        <Btn label="🪖 Barracks"
+          tip={buildDisableReason || (selectedProv?.hasBarracks ? 'Barracks already built' : 'Build barracks — enables recruiting, +1 manpower/season')}
+          disabled={!canBuild || !!selectedProv?.hasBarracks}
+          onClick={() => pid && queueAction({ type: 'build', apCost: 0, provinceId: pid, buildingType: 'barracks' })}
         />
         <Btn label={`🏯 Fort${selectedProv ? ' ' + selectedProv.fortLevel + '/3' : ''}`}
-          tip="Upgrade fort +20% defense per level (1 AP)"
-          disabled={!isPlanning || ap < 1 || !isOwnProv || (selectedProv?.fortLevel ?? 0) >= 3}
-          onClick={() => pid && queueAction({ type: 'build', apCost: 1, provinceId: pid, buildingType: 'fort' })}
+          tip={buildDisableReason || ((selectedProv?.fortLevel ?? 0) >= 3 ? 'Fort at max level' : 'Upgrade fort +20% defense per level')}
+          disabled={!canBuild || (selectedProv?.fortLevel ?? 0) >= 3}
+          onClick={() => pid && queueAction({ type: 'build', apCost: 0, provinceId: pid, buildingType: 'fort' })}
         />
       </Group>
 
@@ -125,17 +169,20 @@ export default function ActionBar() {
 
       {/* ── Intel ────────────────────────────── */}
       <Group label="Intel">
-        <Btn label="🔍 Scout"    tip="Reveal enemy province details for 3 seasons (1 AP) — S"
-          disabled={!isPlanning || ap < 1 || !isEnemyProv}
+        <Btn label="🔍 Scout"
+          tip={scoutDisableReason || 'Reveal enemy province details for 3 seasons (1 Order) — S'}
+          disabled={!isPlanning || !hasOrders || !isEnemyProv}
           onClick={() => pid && queueAction({ type: 'espionage_scout', apCost: 1, targetProvinceId: pid })}
         />
-        <Btn label="🗡 Sabotage" tip="Reduce enemy garrison 15–30%. May be detected (2 AP)"
-          disabled={!isPlanning || ap < 2 || !isEnemyProv}
-          onClick={() => pid && queueAction({ type: 'espionage_sabotage', apCost: 2, targetProvinceId: pid })}
+        <Btn label="🗡 Sabotage"
+          tip={sabDisableReason || 'Reduce enemy garrison 15–30%. May be detected (1 Order)'}
+          disabled={!isPlanning || !hasOrders || !isEnemyProv}
+          onClick={() => pid && queueAction({ type: 'espionage_sabotage', apCost: 1, targetProvinceId: pid })}
         />
-        <Btn label="😠 Incite"   tip="Raise enemy province unrest +15-25. May be detected (2 AP)"
-          disabled={!isPlanning || ap < 2 || !isEnemyProv}
-          onClick={() => pid && queueAction({ type: 'espionage_incite', apCost: 2, targetProvinceId: pid })}
+        <Btn label="😠 Incite"
+          tip={sabDisableReason || 'Raise enemy province unrest +15–25. May be detected (1 Order)'}
+          disabled={!isPlanning || !hasOrders || !isEnemyProv}
+          onClick={() => pid && queueAction({ type: 'espionage_incite', apCost: 1, targetProvinceId: pid })}
         />
       </Group>
 
@@ -146,8 +193,8 @@ export default function ActionBar() {
         <div className="relative">
           <Btn
             label="✋ NAP"
-            tip={`Propose Non-Aggression Pact (${isQin ? '2' : '1'} AP)`}
-            disabled={!isPlanning || ap < (isQin ? 2 : 1)}
+            tip={diploDisableReason || `Propose Non-Aggression Pact (${isQin ? '2' : '1'} Order)`}
+            disabled={!isPlanning || !hasDiploOrders}
             onClick={() => { setShowDiplo(!showDiplo); setShowReform(false); }}
           />
           {showDiplo && (
@@ -206,8 +253,8 @@ export default function ActionBar() {
       <div className="relative">
         <Btn
           label={`📜 Reform${player.activeReform ? ' ●' : ''}`}
-          tip="Enact a kingdom-wide policy (1 AP). Only 1 active at a time."
-          disabled={!isPlanning || ap < 1}
+          tip={!hasOrders ? noOrdersTip : 'Enact a kingdom-wide policy (1 Order). Only 1 active at a time.'}
+          disabled={!isPlanning || !hasOrders}
           onClick={() => { setShowReform(!showReform); setShowDiplo(false); }}
         />
         {showReform && (

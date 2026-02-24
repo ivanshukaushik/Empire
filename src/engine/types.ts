@@ -141,6 +141,7 @@ export interface LogEntry {
 export interface PlayerAction {
   id: string;
   type: ActionType;
+  /** Order cost: 1 for campaign actions (move/attack/espionage/diplomacy/reform), 0 for domestic (build/recruit) */
   apCost: number;
   provinceId?: string;
   targetProvinceId?: string;
@@ -181,6 +182,21 @@ export interface SeasonSummary {
   winCheck: { winner: string; reason: string } | null;
 }
 
+/** Inbound diplomacy proposal from an AI kingdom to the player */
+export interface DiploProposal {
+  id: string;
+  fromKingdomId: string;
+  type: 'nap_offer' | 'tribute_demand' | 'mutual_target';
+  /** Human-readable description of the proposal and its terms */
+  terms: string;
+  /** The kingdom being targeted (for mutual_target pacts) */
+  targetKingdomId?: string;
+  /** Gold the AI will pay per season (for tribute_demand where AI pays player) */
+  tributeAmount?: number;
+  /** Season the proposal was generated */
+  season: number;
+}
+
 export type GamePhase =
   | 'player_planning'
   | 'executing'
@@ -197,8 +213,23 @@ export interface GameState {
   armies: Record<string, Army>;
   relations: Record<string, Record<string, RelationData>>;
   playerKingdomId: string;
-  actionPointsRemaining: number;
-  maxActionPoints: number;
+
+  // ── Orders system (replaces flat AP) ──────────────────────
+  /** Orders remaining this season. Campaign actions each cost 1. */
+  ordersRemaining: number;
+  /** Maximum orders per season (default 2; grows with reforms or events). */
+  maxOrders: number;
+  /**
+   * Tracks which provinces have already used their ONE domestic action
+   * (Build or Recruit) this season. Resets at the start of each season.
+   */
+  provinceDomesticUsed: Record<string, boolean>;
+  /**
+   * Tracks which armies have already used their ONE campaign action
+   * (Move or Attack) this season. Resets at the start of each season.
+   */
+  armyCampaignUsed: Record<string, boolean>;
+
   pendingPlayerActions: PlayerAction[];
   fogOfWar: Record<string, FogOfWarEntry>;
   turnLog: LogEntry[];
@@ -210,4 +241,7 @@ export interface GameState {
   actionBeingPlanned: ActionType | null;
   pendingMoveArmyId: string | null; // ID of the army being moved or attacking
   helpSeen: boolean; // has the player dismissed the first-play help overlay
+
+  /** Inbound diplomacy proposals from AI kingdoms, awaiting player decision */
+  diplomaticInbox: DiploProposal[];
 }

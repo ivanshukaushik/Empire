@@ -38,48 +38,81 @@ npm run preview
    - **Han** (cyan) — Artisans. Cheap forts and buildings; small manpower base.
    - **Chu** (brown) — River Lords. +30% food, strong in the south.
    - **Zhongshan** (gray) — Survivors. High stability, fast unrest recovery; small starting territory.
-3. Optionally change the **seed** (affects random outcomes).
-4. Click **Begin Campaign**.
+3. Click **Begin Campaign**. (Seed is resolved automatically — see below.)
 
 ---
 
 ### Main Interface
 
 ```
-┌─────────────┬──────────────────────────┬────────────────┐
-│ Kingdom     │                          │ Province       │
-│ Panel       │    SVG MAP               │ Detail Panel   │
-│ (left)      │    (center)              │ (right)        │
-│ Resources   │    Click provinces       │ Stats, actions │
-│ Armies      │    to select             │ on selection   │
-│ Stability   │                          │                │
-├─────────────┴──────────────────────────┴────────────────┤
-│              ACTION BAR  [ AP ●●● ]  [End Season ▶]     │
-└─────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│  [Kingdom]  Season 4 · Spring   [■■□ 2/2 Orders]  [✉ 1]  [▶]│
+├──────────────┬───────────────────────────────┬───────────────┤
+│ Kingdom      │                               │ Province      │
+│ Panel        │   PARCHMENT MAP               │ Detail Panel  │
+│ (left)       │   (center)                    │ (right)       │
+│ Overview     │   Rivers · Roads · Mountains  │ Stats, costs  │
+│ Military     │   Click provinces to select   │ Army actions  │
+│ Diplomacy    │                               │               │
+├──────────────┴───────────────────────────────┴───────────────┤
+│  Recent events ··· last 8 non-economy events scrolling ···   │
+├──────────────────────────────────────────────────────────────┤
+│  ACTION BAR  [Move] [Attack] [Scout] [Sabotage] ... [End ▶]  │
+└──────────────────────────────────────────────────────────────┘
 ```
 
-**Click a province** on the map to select it. The right panel shows details and context actions.
+**Click a province** on the map to select it. The right panel shows details and actions.
 
 ---
 
-### Each Season (Turn)
+### Orders System (V1.2)
 
-You have **3 Action Points (AP)** per season. Spend them on:
+Each season you have **2 Orders**. Orders power *campaign* actions — military operations and statecraft that require your personal attention.
 
-| Action | AP | How |
-|--------|----|-----|
-| **Move** army | 1 | Click "⇒ Move" → click your province with army → click target |
-| **Attack** province | 1 | Click "⚔ Attack" → click your army's province → click enemy target |
-| **Recruit** troops | 1 | Select your province → use Province Panel or Action Bar |
-| **Build** Farm/Market/Barracks/Fort | 1 | Select your province → click build button |
-| **Scout** enemy province | 1 | Select enemy province → "🔍 Scout" |
-| **Sabotage** garrison | 2 | Select enemy province → "🗡 Sabotage" |
-| **Incite Unrest** | 2 | Select enemy province → "😠 Incite Unrest" |
-| **Propose NAP** | 1 (Qin: 2) | Click "✋ NAP" in Action Bar |
-| **Offer Tribute** | 1 | Action Bar → NAP dropdown → Tribute section |
-| **Enact Reform** | 1 | Click "📜 Reform" in Action Bar |
+| Action | Orders | Notes |
+|--------|--------|-------|
+| **Move** army | 1 | Army may only act once per season |
+| **Attack** province | 1 | Army may only act once per season |
+| **Scout** enemy province | 1 | Espionage |
+| **Sabotage** garrison | 1 | Espionage |
+| **Incite Unrest** | 1 | Espionage |
+| **Propose NAP** | 1 (Qin: 2) | Diplomacy |
+| **Offer Tribute** | 1 | Diplomacy |
+| **Enact Reform** | 1 | Statecraft |
+| **Build** Farm/Market/Barracks/Fort | **Free** | 1 domestic slot per province per season |
+| **Recruit** troops | **Free** | 1 domestic slot per province per season |
 
-When done, click **End Season ▶**. The AI kingdoms take their turns, combat resolves, and economy updates. A **Season Summary** shows what happened.
+**Key rules:**
+- Each **army** can only take one campaign action (Move or Attack) per season. Acted armies appear grayed-out on the map.
+- Each **province** has one domestic slot — you can Build OR Recruit there per season, at no Order cost.
+- Orders refresh when you **End Season**.
+
+---
+
+### Keyboard Shortcuts
+
+| Key | Action |
+|-----|--------|
+| `M` | Move wizard (requires army selected, Orders > 0) |
+| `A` | Attack wizard (requires army selected, Orders > 0) |
+| `R` | Recruit in selected province (free) |
+| `E` | End Season |
+| `K` | Toggle Kingdom Info panel |
+| `Escape` | Cancel current wizard step |
+| `?` | Toggle help overlay |
+
+---
+
+### Diplomatic Inbox
+
+AI kingdoms may send you diplomatic proposals each season. A purple **✉** badge on the top bar signals unread proposals. Open the **Diplomacy tab** in the Kingdom panel to review them.
+
+Proposal types:
+- **NAP Offer** — Mutual non-aggression for 8 seasons. Accepting improves relations.
+- **Tribute Demand** — Pay gold for peace. Accepting transfers gold and improves relations.
+- **Mutual Target** — Agree on a shared enemy. Improves relations with the proposer.
+
+Declining a proposal costs −5 relations.
 
 ---
 
@@ -115,7 +148,7 @@ Each season:
 - If treasury goes negative: **stability drops −5**
 - If food runs out: armies take **attrition and morale loss**
 
-Buildings in a province:
+Buildings in a province (free domestic action):
 - **Farm** (+2 food/season)
 - **Market** (+2 income/season)
 - **Barracks** (+1 manpower/season, cheaper recruiting)
@@ -134,7 +167,7 @@ Buildings in a province:
 
 ### Reforms
 
-Only 1 active reform at a time. Costs 1 AP to enact.
+Only 1 active reform at a time. Costs 1 Order to enact.
 
 | Reform | Bonus | Penalty |
 |--------|-------|---------|
@@ -164,34 +197,50 @@ Only 1 active reform at a time. Costs 1 AP to enact.
 - **Expand early** — provinces compound income and manpower.
 - **Scout before attacking** — know the garrison before committing armies.
 - **NAPs buy time** — use diplomacy to avoid two-front wars.
-- **Recruit in barracks provinces** — capitals also work.
+- **Build is free** — use your domestic slot every season; infrastructure compounds fast.
 - **Watch your food** — starving armies lose morale fast.
 - **Forts on borders** — even Fort Level 1 (+20% defense) significantly helps.
 - **Stability matters** — bankrupt kingdoms spiral; keep treasury positive.
+- **Check your inbox** — AI proposals can offer advantageous peace terms.
+- **Acted armies** appear grayed on the map — plan your Order spend before ending the season.
 
 ---
 
 ## Architecture Notes
 
 - **Pure client-side** — no server, no external APIs. Runs offline.
-- **Deterministic** — same seed + same actions = same game. Share seeds with friends.
-- **Save/Load** — auto-save available from the left panel. Stored in localStorage.
+- **Deterministic** — seed is derived from wall-clock time at game start (configurable via `src/config.ts`).
+  - `SEED_MODE: 'time'` (default) — unique game each run.
+  - `SEED_MODE: 'fixed'` — use `FIXED_SEED` for reproducible testing.
+  - Dev: append `?seed=<number>` to the URL to override (requires `DEV_QUERY_SEED_OVERRIDE = true`).
+- **Save/Load** — auto-save available from the left panel. Stored in localStorage (key: `warring-states-v2-save`).
 - Engine lives in `src/engine/` (pure TypeScript, testable independently).
 - AI lives in `src/ai/aiAgent.ts` (utility-based planner, one file).
-- Map data in `src/data/gameData.ts` (easy to tune province stats).
+- Map data in `src/data/gameData.ts` (province stats), `src/data/mapFeatures.ts` (rivers, roads, terrain decorations).
 
 See `docs/GDD.md` for the full Game Design Document and `docs/TDD.md` for the Technical Design Document.
 
 ---
 
-## V1 Scope
+## Changelog
 
-This is V1. Features intentionally cut:
-- Multiplayer (architecture supports it)
-- Multi-turn sieges
-- Defensive alliances
-- Hero units / generals
-- Random event deck
-- Sound / music
-- Animated battle sequences
-- Technology trees
+### V1.2 — Orders, Diplomacy & Parchment Map
+- **Orders system**: replaced 3 AP/turn with 2 Orders/turn for campaign actions; Build/Recruit are free domestic actions (1 slot per province per season)
+- **Per-army campaign limit**: each army may Move or Attack once per season; acted armies gray out on the map
+- **Diplomatic inbox**: AI kingdoms send NAP offers, tribute demands, and mutual-target proposals; surfaced in the Diplomacy tab with Accept/Decline
+- **Recent events feed**: last 8 non-economy log entries scroll below the map during planning
+- **Parchment map**: CSS warm-tan gradient background + vignette, SVG grain/shadow filters, province labels in serif font
+- **Map features**: Yellow River, Wei River, Han River, Yangtze, Fen River (smooth Bezier curves); road network (dotted lines); mountain and forest decorations
+- **Seed moved to config**: `src/config.ts` controls seed mode; seed input removed from game setup UI
+
+### V1.1 — UX Polish
+- Attack/Move wizard (step-by-step guided flow)
+- Tooltips on all action buttons explaining requirements
+- Kingdom info panel restructured (Overview / Military / Diplomacy tabs)
+- Season summary improvements
+- Keyboard shortcuts (M, A, R, E, K, ?, Escape)
+
+### V1.0 — Initial Release
+- 8 kingdoms, 40 provinces, full turn-based game loop
+- Fog of war, terrain, buildings, reforms, espionage, diplomacy
+- AI agents, seasonal economy, win/lose conditions
