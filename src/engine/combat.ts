@@ -171,10 +171,23 @@ export function resolveBattle(
       newRelations[defenderKingdomId][order.attackerKingdomId].score - 30
     );
     newRelations[defenderKingdomId][order.attackerKingdomId].atWarWith = true;
-    // Record attacker in defender's AI memory
-    const defKingdom = newKingdoms[defenderKingdomId];
-    if (defKingdom.personality && !defKingdom.personality.recentAttackers.includes(order.attackerKingdomId)) {
-      defKingdom.personality.recentAttackers.push(order.attackerKingdomId);
+    // Record attacker in defender's AI memory.
+    // IMPORTANT: state objects are Immer-frozen — we must copy the kingdom and its
+    // personality before mutating any nested field. A shallow { ...state.kingdoms }
+    // only copies the top-level record; the Kingdom values are still frozen references.
+    const rawDefKingdom = newKingdoms[defenderKingdomId];
+    if (rawDefKingdom.personality) {
+      newKingdoms[defenderKingdomId] = {
+        ...rawDefKingdom,
+        personality: {
+          ...rawDefKingdom.personality,
+          recentAttackers: rawDefKingdom.personality.recentAttackers.includes(
+            order.attackerKingdomId
+          )
+            ? rawDefKingdom.personality.recentAttackers
+            : [...rawDefKingdom.personality.recentAttackers, order.attackerKingdomId],
+        },
+      };
     }
   }
 

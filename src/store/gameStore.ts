@@ -94,6 +94,7 @@ export const useGameStore = create<GameStore>()(
       if (!gameState) return;
       if (gameState.phase !== 'player_planning') return;
 
+      // Set phase to 'executing' first so the "Resolving…" overlay renders.
       set({
         gameState: {
           ...gameState,
@@ -103,12 +104,26 @@ export const useGameStore = create<GameStore>()(
         },
       });
 
-      setTimeout(() => {
-        const { gameState: current } = get();
-        if (!current) return;
-        const newState = executeTurn(current);
-        set({ gameState: newState });
-      }, 50);
+      // Yield to the browser so it can flush the paint (show the overlay)
+      // before we block the main thread with season resolution.
+      requestAnimationFrame(() => {
+        // One extra tick ensures the overlay is actually composited.
+        setTimeout(() => {
+          const { gameState: current } = get();
+          if (!current) return;
+          try {
+            const newState = executeTurn(current);
+            set({ gameState: newState });
+          } catch (err) {
+            console.error('[endTurn] executeTurn threw — resetting to player_planning:', err);
+            // Return to planning phase so the player isn't permanently stuck.
+            set({
+              gameState: { ...current, phase: 'player_planning' },
+              actionFeedback: '⚠ Season resolution failed — check the console for details.',
+            });
+          }
+        }, 0);
+      });
     },
 
     dismissSummary: () => {

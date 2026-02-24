@@ -19,6 +19,17 @@ import { recomputeFog } from './initialState';
 import { aiPlanTurn } from '../ai/aiAgent';
 
 // ============================================================
+// PERFORMANCE GUARDS
+// ============================================================
+
+/** Hard cap on AI action iterations per kingdom per season. */
+const MAX_AI_ACTIONS_PER_KINGDOM = 30;
+/** Hard cap on total battles that can be resolved in one season. */
+const MAX_BATTLES_PER_SEASON = 200;
+/** Cap on turnLog entries kept (older entries are discarded). */
+const MAX_TURN_LOG_ENTRIES = 200;
+
+// ============================================================
 // ACTION CLASSIFICATION
 // ============================================================
 
@@ -360,6 +371,10 @@ export function applyPlayerAction(
 // EXECUTE FULL TURN (called when player ends season)
 // ============================================================
 export function executeTurn(state: GameState): GameState {
+  const t0 = performance.now();
+  const seasonLabel = `[Season ${state.season}] executeTurn`;
+  console.groupCollapsed(seasonLabel);
+
   const rng = createRng(state.seed + state.season * 1000);
 
   let s = { ...state };
@@ -377,13 +392,23 @@ export function executeTurn(state: GameState): GameState {
   };
 
   // --- Phase 2: AI planning ---
+  const t1 = performance.now();
   const aiKingdoms = Object.values(s.kingdoms).filter(
     (k) => !k.isPlayer && !k.isEliminated
   );
 
+  let totalBattles = 0;
   for (const aiK of aiKingdoms) {
     const aiActions = aiPlanTurn(aiK, s, rng);
+    if (aiActions.length > MAX_AI_ACTIONS_PER_KINGDOM) {
+      console.warn(`[executeTurn] ${aiK.name} generated ${aiActions.length} actions — capping at ${MAX_AI_ACTIONS_PER_KINGDOM}`);
+      aiActions.splice(MAX_AI_ACTIONS_PER_KINGDOM);
+    }
     for (const action of aiActions) {
+      if (totalBattles >= MAX_BATTLES_PER_SEASON) {
+        console.warn(`[executeTurn] Battle cap (${MAX_BATTLES_PER_SEASON}) reached — skipping remaining AI attack orders`);
+        break;
+      }
       // Apply each AI action
       switch (action.type) {
         case 'attack': {
@@ -397,6 +422,7 @@ export function executeTurn(state: GameState): GameState {
             s = result.newState;
             summary.battles.push(result.result);
             summary.aiActions.push(result.result.narrative);
+            totalBattles++;
           }
           break;
         }
@@ -495,7 +521,10 @@ export function executeTurn(state: GameState): GameState {
     }
   }
 
+  console.log(`  AI planning: ${(performance.now() - t1).toFixed(1)}ms  (${totalBattles} battles, ${aiKingdoms.length} kingdoms)`);
+
   // --- Phase 3: Generate AI diplomacy proposals for player inbox ---
+  const t3 = performance.now();
   const newProposals = generateAIProposals(s, rng);
   if (newProposals.length > 0) {
     // Keep existing inbox + add new (max 5 total)
@@ -507,15 +536,23 @@ export function executeTurn(state: GameState): GameState {
     }
   }
 
+  console.log(`  Diplomacy proposals: ${(performance.now() - t3).toFixed(1)}ms`);
+
   // --- Phase 4: Economy ---
+  const t4 = performance.now();
   const econResult = economyPhase(s);
   s = econResult.newState;
   summary.economyLines = econResult.lines;
 
+  console.log(`  Economy: ${(performance.now() - t4).toFixed(1)}ms`);
+
   // --- Phase 5: Diplomacy tick ---
+  const t5 = performance.now();
   const diplomacyResult = diplomacyPhase(s);
   s = diplomacyResult.newState;
   summary.diplomaticLines.push(...diplomacyResult.lines);
+
+  console.log(`  Diplomacy tick: ${(performance.now() - t5).toFixed(1)}ms`);
 
   // --- Mark eliminations ---
   s = markEliminated(s);
@@ -541,6 +578,11 @@ export function executeTurn(state: GameState): GameState {
     // Recompute fog of war
     const newFog = recomputeFog(state.playerKingdomId, s.provinces, s.fogOfWar, newSeason);
 
+    // Cap turnLog so it never grows unboundedly across many seasons
+    const cappedLog = s.turnLog.length > MAX_TURN_LOG_ENTRIES
+      ? s.turnLog.slice(-MAX_TURN_LOG_ENTRIES)
+      : s.turnLog;
+
     s = {
       ...s,
       season: newSeason,
@@ -552,9 +594,13 @@ export function executeTurn(state: GameState): GameState {
       armyCampaignUsed: {},
       pendingPlayerActions: [],
       fogOfWar: newFog,
+      turnLog: cappedLog,
       seasonSummary: summary,
     };
   }
+
+  console.log(`  Total: ${(performance.now() - t0).toFixed(1)}ms`);
+  console.groupEnd();
 
   return s;
 }
