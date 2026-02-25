@@ -1,8 +1,9 @@
 import React, { useMemo, useState, useRef, useCallback } from 'react';
 import { useGameStore } from '../store/gameStore';
-import { Province, FogOfWarEntry } from '../engine/types';
+import { Province, FogOfWarEntry, ArmyMovement } from '../engine/types';
 import { previewCombat, OddsRating } from '../engine/combatPreview';
 import { MAP_FEATURES } from '../data/mapFeatures';
+import { BATTLE_FLASH_DURATION_DAYS } from '../engine/simulateTick';
 
 const R = 18; // province node radius
 const MAP_W = 820;
@@ -71,15 +72,15 @@ export default function MapView({ className = '' }: Props) {
 
   const playerKid = gameState.playerKingdomId;
 
-  // Province IDs with a player army that hasn't acted yet
+  // Province IDs with a player army that is NOT currently marching
   const armyProvinceIds = useMemo(() => {
     const set = new Set<string>();
-    const armyCampaignUsed = gameState.armyCampaignUsed ?? {};
+    const activeMovements = gameState.activeMovements ?? {};
     Object.values(gameState.armies)
-      .filter((a) => a.kingdomId === playerKid && a.size > 0 && !armyCampaignUsed[a.id])
+      .filter((a) => a.kingdomId === playerKid && a.size > 0 && !activeMovements[a.id])
       .forEach((a) => set.add(a.provinceId));
     return set;
-  }, [gameState.armies, gameState.armyCampaignUsed, playerKid]);
+  }, [gameState.armies, gameState.activeMovements, playerKid]);
 
   // Valid targets for the selected army
   const validTargetIds = useMemo(() => {
@@ -130,9 +131,9 @@ export default function MapView({ className = '' }: Props) {
       if (!pendingMoveArmyId) {
         // Step 1: select an army
         if (armyProvinceIds.has(pId)) {
-          const armyCampaignUsed = gameState.armyCampaignUsed ?? {};
+          const activeMovements = gameState.activeMovements ?? {};
           const armies = Object.values(gameState.armies)
-            .filter((a) => a.kingdomId === playerKid && a.provinceId === pId && !armyCampaignUsed[a.id])
+            .filter((a) => a.kingdomId === playerKid && a.provinceId === pId && !activeMovements[a.id])
             .sort((a, b) => b.size - a.size);
           if (armies.length > 0) {
             setArmy(armies[0].id);
@@ -173,7 +174,6 @@ export default function MapView({ className = '' }: Props) {
   }
 
   const isPlanning  = actionBeingPlanned === 'attack' || actionBeingPlanned === 'move';
-  const isExecuting = gameState.phase === 'executing';
 
   // Pre-build road coordinate lookup
   const roadCoords = useMemo(() => {
@@ -183,6 +183,41 @@ export default function MapView({ className = '' }: Props) {
       return a && b ? { x1: a.x, y1: a.y, x2: b.x, y2: b.y } : null;
     }).filter(Boolean);
   }, [gameState.provinces]);
+
+  // Compute interpolated positions for marching armies
+  const marchingArmies = useMemo(() => {
+    const result: { army: { id: string; kingdomId: string; size: number }; x: number; y: number; isHostile: boolean }[] = [];
+    const movements = gameState.activeMovements ?? {};
+    for (const [armyId, mv] of Object.entries(movements)) {
+      const fromP = gameState.provinces[mv.fromProvinceId];
+      const toP   = gameState.provinces[mv.toProvinceId];
+      const army  = gameState.armies[armyId];
+      if (!fromP || !toP || !army) continue;
+      const dur = mv.arrivalTimeDays - mv.startTimeDays;
+      const progress = dur > 0
+        ? Math.min(1, (gameState.gameTimeDays - mv.startTimeDays) / dur)
+        : 1;
+      result.push({
+        army: { id: armyId, kingdomId: army.kingdomId, size: army.size },
+        x: fromP.x + (toP.x - fromP.x) * progress,
+        y: fromP.y + (toP.y - fromP.y) * progress,
+        isHostile: mv.isHostile,
+      });
+    }
+    return result;
+  }, [gameState.activeMovements, gameState.provinces, gameState.armies, gameState.gameTimeDays]);
+
+  // Active battle flashes (provinces with a very recent battle)
+  const battleFlashIds = useMemo(() => {
+    const ids = new Set<string>();
+    const now = gameState.gameTimeDays;
+    for (const b of (gameState.recentBattles ?? [])) {
+      if (now - b.resolvedAtDays < BATTLE_FLASH_DURATION_DAYS) {
+        ids.add(b.provinceId);
+      }
+    }
+    return ids;
+  }, [gameState.recentBattles, gameState.gameTimeDays]);
 
   return (
     <div className={`relative ${className}`} style={{ overflow: 'hidden' }}>
@@ -421,12 +456,13 @@ export default function MapView({ className = '' }: Props) {
                 </text>
               )}
 
-              {/* Army dots */}
+              {/* Army dots — hide armies that are currently marching (shown as animated tokens) */}
               {armiesHere.map((army, i) => {
                 const k = gameState.kingdoms[army.kingdomId];
-                const isActed = !!(gameState.armyCampaignUsed ?? {})[army.id];
+                const isMarching = !!(gameState.activeMovements ?? {})[army.id];
+                if (isMarching) return null; // rendered in marching-tokens layer
                 const dotColor = army.kingdomId === playerKid
-                  ? (isActed ? '#9ca3af' : '#FCD34D')
+                  ? '#FCD34D'
                   : (k?.color ?? '#fff');
                 return (
                   <circle
@@ -437,7 +473,7 @@ export default function MapView({ className = '' }: Props) {
                     fill={dotColor}
                     stroke="rgba(0,0,0,0.6)"
                     strokeWidth={1}
-                    aria-label={isActed ? `${army.name} — Acted` : `${army.name} — Ready`}
+                    aria-label={`${army.name} — ${army.size.toLocaleString()} troops`}
                   />
                 );
               })}
@@ -465,6 +501,46 @@ export default function MapView({ className = '' }: Props) {
           );
         })}
 
+        {/* ── Battle flash rings ────────────────────────────────────────── */}
+        {Array.from(battleFlashIds).map((pid) => {
+          const p = gameState.provinces[pid];
+          if (!p) return null;
+          return (
+            <g key={`bf-${pid}`} style={{ pointerEvents: 'none' }}>
+              <circle cx={p.x} cy={p.y} r={R + 10} fill="none"
+                stroke="rgba(220,60,40,0.7)" strokeWidth={2} strokeDasharray="4 3" />
+              <text x={p.x} y={p.y - R - 8} textAnchor="middle" fontSize={12}
+                fill="rgba(255,80,60,0.9)">
+                ⚔
+              </text>
+            </g>
+          );
+        })}
+
+        {/* ── Marching army tokens ─────────────────────────────────────── */}
+        {marchingArmies.map(({ army, x, y, isHostile }) => {
+          const k = gameState.kingdoms[army.kingdomId];
+          const color = k?.color ?? '#fff';
+          const isPlayer = army.kingdomId === playerKid;
+          return (
+            <g key={`mv-${army.id}`} style={{ pointerEvents: 'none' }}>
+              {/* Movement trail glow */}
+              <circle cx={x} cy={y} r={7} fill={color} opacity={0.15} />
+              {/* Army token */}
+              <circle cx={x} cy={y} r={5}
+                fill={isPlayer ? '#FCD34D' : color}
+                stroke={isHostile ? '#ef4444' : 'rgba(0,0,0,0.7)'}
+                strokeWidth={isHostile ? 2 : 1}
+              />
+              {/* Hostile arrow indicator */}
+              {isHostile && (
+                <text x={x + 6} y={y - 4} fontSize={8} fill="#ef4444"
+                  style={{ userSelect: 'none' }}>⚔</text>
+              )}
+            </g>
+          );
+        })}
+
         {/* ── Map title and attribution ─────────────────────────────────── */}
         <text x={12} y={18} fontSize={10} fill="rgba(60,35,8,0.7)"
           fontFamily="'Palatino Linotype', Georgia, serif" fontStyle="italic">
@@ -475,21 +551,6 @@ export default function MapView({ className = '' }: Props) {
           {Object.values(gameState.provinces).filter((p) => p.owner === playerKid).length}/
           {Object.keys(gameState.provinces).length} provinces
         </text>
-
-        {/* ── Executing overlay ─────────────────────────────────────────── */}
-        {isExecuting && (
-          <g>
-            <rect x={0} y={0} width={MAP_W} height={MAP_H} fill="rgba(0,0,0,0.6)" />
-            <text x={MAP_W / 2} y={MAP_H / 2 - 10} textAnchor="middle" fontSize={22}
-              fill="#D4A86A" fontFamily="'Palatino Linotype', Georgia, serif" fontStyle="italic">
-              Resolving Season...
-            </text>
-            <text x={MAP_W / 2} y={MAP_H / 2 + 16} textAnchor="middle" fontSize={11}
-              fill="rgba(212,168,106,0.6)" fontFamily="Georgia, serif">
-              AI kingdoms are making their moves
-            </text>
-          </g>
-        )}
       </svg>
 
       {/* ── Kingdom legend ────────────────────────────────────────────── */}

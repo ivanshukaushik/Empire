@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useGameStore } from '../store/gameStore';
 import { ReformType } from '../engine/types';
 import { Tooltip } from './Tooltip';
+import { TERRAIN_TRAVEL_DAYS } from '../engine/simulateTick';
 
 const REFORM_OPTIONS: { id: ReformType; label: string; bonus: string; penalty: string }[] = [
   { id: 'iron_fist',       label: 'Iron Fist',       bonus: 'Combat +20%',        penalty: 'Economy −10%' },
@@ -13,12 +14,13 @@ const REFORM_OPTIONS: { id: ReformType; label: string; bonus: string; penalty: s
 
 export default function ActionBar() {
   const gameState          = useGameStore((s) => s.gameState!);
-  const endTurn            = useGameStore((s) => s.endTurn);
   const queueAction        = useGameStore((s) => s.queueAction);
   const setAction          = useGameStore((s) => s.setActionBeingPlanned);
   const setPendingMoveArmy = useGameStore((s) => s.setPendingMoveArmy);
   const actionFeedback     = useGameStore((s) => s.actionFeedback);
   const clearFeedback      = useGameStore((s) => s.clearFeedback);
+  const togglePause        = useGameStore((s) => s.togglePause);
+  const setSpeed           = useGameStore((s) => s.setSpeed);
 
   const [showReform, setShowReform]   = useState(false);
   const [showDiplo, setShowDiplo]     = useState(false);
@@ -28,6 +30,7 @@ export default function ActionBar() {
   const {
     ordersRemaining: orders, phase, playerKingdomId, kingdoms,
     actionBeingPlanned, provinceDomesticUsed, armyCampaignUsed,
+    paused, speed, activeMovements,
   } = gameState;
 
   const isPlanning  = phase === 'player_planning';
@@ -47,13 +50,13 @@ export default function ActionBar() {
   // Check if selected province has used its domestic slot
   const provDomesticUsed = !!(pid && provinceDomesticUsed?.[pid]);
 
-  // Check if player army in selected province has already acted
+  // Check if player army in selected province is currently marching
   const armyInProv = pid
     ? Object.values(gameState.armies).find(
         (a) => a.kingdomId === playerKingdomId && a.provinceId === pid && a.size > 0
       )
     : null;
-  const armyActed = !!(armyInProv && armyCampaignUsed?.[armyInProv.id]);
+  const armyActed = !!(armyInProv && (activeMovements ?? {})[armyInProv.id]);
 
   // Levy cooldown check
   const levyCooldownUntil = selectedProv?.levyCooldownUntil ?? 0;
@@ -337,6 +340,7 @@ export default function ActionBar() {
 
       {/* Keyboard hint */}
       <div className="text-xs text-gray-700 shrink-0 hidden lg:flex gap-2 mr-2">
+        <span title="Pause / resume">Space</span>
         <span title="Attack">A</span>
         <span title="Move">M</span>
         <span title="Split army">X</span>
@@ -344,18 +348,40 @@ export default function ActionBar() {
         <span title="Recruit at selected">R</span>
         <span title="Accept inbox proposal">Y</span>
         <span title="Decline inbox proposal">N</span>
-        <span title="End season">S/↵</span>
+        <span title="Speed 1×/2×/4×/8×">1-4</span>
         <span title="Cancel">Esc</span>
       </div>
 
-      {/* End season */}
+      {/* Speed controls */}
+      <div className="flex items-center gap-1 shrink-0">
+        {([1, 2, 4, 8] as const).map((s) => (
+          <button
+            key={s}
+            className={`text-xs px-2 py-1 rounded border ${
+              speed === s
+                ? 'bg-amber-700 border-amber-500 text-amber-100'
+                : 'bg-gray-900 border-gray-700 text-gray-400 hover:border-gray-500'
+            }`}
+            onClick={() => setSpeed(s)}
+            title={`${s}× speed`}
+          >
+            {s}×
+          </button>
+        ))}
+      </div>
+
+      {/* Pause / play */}
       <button
-        className={`btn-primary px-5 py-2 shrink-0 font-medium ${!isPlanning ? 'opacity-50 cursor-not-allowed' : ''}`}
+        className={`px-5 py-2 shrink-0 font-medium rounded border text-sm ${
+          paused
+            ? 'bg-green-800 border-green-600 text-green-100 hover:bg-green-700'
+            : 'bg-amber-800 border-amber-600 text-amber-100 hover:bg-amber-700'
+        } ${!isPlanning ? 'opacity-50 cursor-not-allowed' : ''}`}
         disabled={!isPlanning}
-        onClick={endTurn}
-        title="End Season [S or Enter]"
+        onClick={togglePause}
+        title="Pause / Resume [Space]"
       >
-        End Season ▶
+        {paused ? '▶ Resume' : '⏸ Pause'}
       </button>
     </div>
   );

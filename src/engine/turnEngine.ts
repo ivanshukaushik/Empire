@@ -9,6 +9,7 @@ import {
   ActionType,
   DiploProposal,
   RulerSuccessionEvent,
+  ArmyMovement,
 } from './types';
 import { createRng, rollFloat } from './rng';
 import { resolveBattle, AttackOrder } from './combat';
@@ -19,6 +20,7 @@ import { checkWinConditions, markEliminated } from './winConditions';
 import { recomputeFog } from './initialState';
 import { aiPlanTurn } from '../ai/aiAgent';
 import { processRulerAging, generateRuler } from './ruler';
+import { computeTravelDays } from './simulateTick';
 
 // ============================================================
 // PERFORMANCE GUARDS
@@ -98,11 +100,11 @@ export function validateAction(
     }
   }
 
-  // ── Per-army campaign slot check (move/attack) ────────────
+  // ── Per-army movement check (already marching?) ───────────
   if (action.type === 'move' || action.type === 'attack') {
-    if (action.armyId && state.armyCampaignUsed[action.armyId]) {
+    if (action.armyId && state.activeMovements?.[action.armyId]) {
       const armyName = state.armies[action.armyId]?.name ?? 'This army';
-      return { valid: false, reason: `${armyName} has already acted this season.` };
+      return { valid: false, reason: `${armyName} is already marching — wait for it to arrive.` };
     }
   }
 
@@ -245,13 +247,7 @@ export function applyPlayerAction(
     ? { ...state, ordersRemaining: state.ordersRemaining - orderCost }
     : { ...state };
 
-  // Mark per-army campaign used
-  if ((action.type === 'move' || action.type === 'attack') && action.armyId) {
-    newState = {
-      ...newState,
-      armyCampaignUsed: { ...newState.armyCampaignUsed, [action.armyId]: true },
-    };
-  }
+  // (Move/attack no longer mark armyCampaignUsed — activeMovements is the lock)
 
   // Mark province domestic slot used (build/recruit/levy)
   if ((DOMESTIC_ACTIONS.has(action.type) || action.type === 'levy') && action.provinceId) {
@@ -327,22 +323,51 @@ export function applyPlayerAction(
 
     case 'move': {
       const army = newArmies[action.armyId!];
-      newArmies[action.armyId!] = { ...army, provinceId: action.targetProvinceId! };
-      message = `${army.name} moved to ${newProvinces[action.targetProvinceId!].name}.`;
-      break;
+      const targetProv = newProvinces[action.targetProvinceId!];
+      const travelDays = computeTravelDays(targetProv.terrain, newState.season);
+      const mv: ArmyMovement = {
+        armyId:           action.armyId!,
+        fromProvinceId:   army.provinceId,
+        toProvinceId:     action.targetProvinceId!,
+        startTimeDays:    newState.gameTimeDays,
+        arrivalTimeDays:  newState.gameTimeDays + travelDays,
+        isHostile:        false,
+        attackerKingdomId: kid,
+      };
+      return {
+        newState: {
+          ...newState,
+          provinces: newProvinces,
+          kingdoms:  newKingdoms,
+          armies:    newArmies,
+          activeMovements: { ...newState.activeMovements, [action.armyId!]: mv },
+        },
+        message: `${army.name} marches to ${targetProv.name}. Arrives in ${travelDays} day${travelDays !== 1 ? 's' : ''}.`,
+      };
     }
 
     case 'attack': {
-      const order: AttackOrder = {
-        armyId: action.armyId!,
-        targetProvinceId: action.targetProvinceId!,
+      const army = newArmies[action.armyId!];
+      const targetProv = newProvinces[action.targetProvinceId!];
+      const travelDays = computeTravelDays(targetProv.terrain, newState.season);
+      const mv: ArmyMovement = {
+        armyId:           action.armyId!,
+        fromProvinceId:   army.provinceId,
+        toProvinceId:     action.targetProvinceId!,
+        startTimeDays:    newState.gameTimeDays,
+        arrivalTimeDays:  newState.gameTimeDays + travelDays,
+        isHostile:        true,
         attackerKingdomId: kid,
       };
-      const result = resolveBattle(order, { ...newState, provinces: newProvinces, kingdoms: newKingdoms, armies: newArmies }, rng);
       return {
-        newState: result.newState,
-        message: result.result.narrative,
-        battleResult: result.result,
+        newState: {
+          ...newState,
+          provinces: newProvinces,
+          kingdoms:  newKingdoms,
+          armies:    newArmies,
+          activeMovements: { ...newState.activeMovements, [action.armyId!]: mv },
+        },
+        message: `${army.name} advances on ${targetProv.name}! Battle in ${travelDays} day${travelDays !== 1 ? 's' : ''}.`,
       };
     }
 

@@ -256,6 +256,31 @@ export type GamePhase =
   | 'season_summary'
   | 'game_over';
 
+// ── Continuous-time simulation types ──────────────────────────
+
+/** An army currently marching between provinces. */
+export interface ArmyMovement {
+  armyId: string;
+  fromProvinceId: string;
+  toProvinceId: string;
+  startTimeDays: number;
+  arrivalTimeDays: number;
+  /** True if the destination is enemy-owned (will trigger battle on arrival). */
+  isHostile: boolean;
+  attackerKingdomId: string;
+}
+
+/** Keeps a brief record of a resolved battle for the map overlay. */
+export interface RecentBattle {
+  id: string;
+  provinceId: string;
+  attackerKingdomId: string;
+  defenderKingdomId: string;
+  attackerWon: boolean;
+  resolvedAtDays: number;
+  narrative: string;
+}
+
 export interface ToastMessage {
   id: string;
   message: string;
@@ -265,8 +290,8 @@ export interface ToastMessage {
 
 export interface GameState {
   seed: number;
-  season: number; // starts at 1
-  year: number; // starts at 475 (BCE)
+  season: number; // absolute season count starting at 1; season%4: 0=winter,1=spring,2=summer,3=autumn
+  year: number;   // BCE year, derived from gameTimeDays
   phase: GamePhase;
   provinces: Record<string, Province>;
   kingdoms: Record<string, Kingdom>;
@@ -274,10 +299,11 @@ export interface GameState {
   relations: Record<string, Record<string, RelationData>>;
   playerKingdomId: string;
 
-  // ── Orders system ──────────────────────────────────────────
+  // ── Orders system (refreshed automatically at each season boundary) ──
   ordersRemaining: number;
   maxOrders: number;
   provinceDomesticUsed: Record<string, boolean>;
+  /** @deprecated Use activeMovements to determine if an army is busy */
   armyCampaignUsed: Record<string, boolean>;
 
   pendingPlayerActions: PlayerAction[];
@@ -300,4 +326,20 @@ export interface GameState {
 
   /** Transient toast messages for the map overlay */
   toastMessages: ToastMessage[];
+
+  // ── Continuous-time simulation fields ─────────────────────
+  /** Days elapsed since game start (0 = Spring 475 BCE). Drives all time logic. */
+  gameTimeDays: number;
+  /** Whether the simulation clock is paused. */
+  paused: boolean;
+  /** Game days that elapse per real second. */
+  speed: 1 | 2 | 4 | 8;
+  /** Armies currently marching between provinces, keyed by armyId. */
+  activeMovements: Record<string, ArmyMovement>;
+  /** Next day each AI kingdom should run its planning loop, keyed by kingdomId. */
+  nextAiPlanAtDays: Record<string, number>;
+  /** Last N resolved battles, kept for the map battle-flash overlay. */
+  recentBattles: RecentBattle[];
+  /** gameTimeDays when the last economy phase ran (runs every 90 days). */
+  lastEconomyAtDays: number;
 }

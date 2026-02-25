@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { useGameStore } from '../store/gameStore';
 import MapView from './MapView';
 import KingdomInfo from './KingdomInfo';
@@ -18,15 +18,68 @@ interface Toast {
 
 let toastId = 0;
 
+// ── RAF game loop ─────────────────────────────────────────────
+// Runs as a singleton effect inside GameBoard so it shares the React tree.
+
+function useGameLoop() {
+  const tickFn     = useGameStore((s) => s.tick);
+  const rafRef     = useRef<number | null>(null);
+  const lastMsRef  = useRef<number>(performance.now());
+  const accumRef   = useRef<number>(0);   // fractional days accumulated
+
+  useEffect(() => {
+    function frame() {
+      const state = useGameStore.getState().gameState;
+
+      if (
+        state &&
+        !state.paused &&
+        !state.isGameOver &&
+        state.phase === 'player_planning'
+      ) {
+        const now = performance.now();
+        const elapsedMs = Math.min(now - lastMsRef.current, 200); // cap at 200 ms
+        lastMsRef.current = now;
+
+        // Accumulate fractional game-days
+        accumRef.current += (elapsedMs / 1000) * state.speed;
+
+        const wholeDays = Math.floor(accumRef.current);
+        if (wholeDays > 0) {
+          accumRef.current -= wholeDays;
+          // tick() already caps internally at 60 days per call
+          tickFn(wholeDays);
+        }
+      } else {
+        // While paused / in summary / game over, just reset the real-time baseline
+        // so we don't skip ahead when unpausing.
+        lastMsRef.current = performance.now();
+      }
+
+      rafRef.current = requestAnimationFrame(frame);
+    }
+
+    lastMsRef.current = performance.now();
+    rafRef.current = requestAnimationFrame(frame);
+    return () => {
+      if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
+    };
+  }, [tickFn]);
+}
+
 export default function GameBoard() {
   const gameState          = useGameStore((s) => s.gameState!);
-  const endTurn            = useGameStore((s) => s.endTurn);
   const queueAction        = useGameStore((s) => s.queueAction);
   const setAction          = useGameStore((s) => s.setActionBeingPlanned);
   const setPendingMoveArmy = useGameStore((s) => s.setPendingMoveArmy);
   const dismissHelp        = useGameStore((s) => s.dismissHelp);
   const acceptProposal     = useGameStore((s) => s.acceptProposal);
   const declineProposal    = useGameStore((s) => s.declineProposal);
+  const togglePause        = useGameStore((s) => s.togglePause);
+  const setSpeed           = useGameStore((s) => s.setSpeed);
+
+  // Start the RAF game loop
+  useGameLoop();
 
   const [toasts, setToasts] = useState<Toast[]>([]);
 
@@ -49,33 +102,38 @@ export default function GameBoard() {
 
       const hasOrders = gameState.ordersRemaining > 0;
 
-      switch (e.key.toLowerCase()) {
-        // ── Global ────────────────────────────────────────────
-        case 'escape':
-          setAction(null);
+      switch (e.key) {
+        // ── Pause / resume — Space ─────────────────────────────
+        case ' ':
+          e.preventDefault();
+          togglePause();
+          addToast(gameState.paused ? '▶ Resumed' : '⏸ Paused', 'info');
           break;
 
-        // ── End Season — S or Enter ───────────────────────────
-        case 's':
-          if (isPlanning) {
-            endTurn();
-            addToast('Season ended. Resolving…', 'info');
-          }
-          break;
-        case 'enter':
-          if (isPlanning) endTurn();
+        // ── Speed controls — 1 / 2 / 3 / 4 ───────────────────
+        case '1': setSpeed(1); addToast('Speed: 1×', 'info'); break;
+        case '2': setSpeed(2); addToast('Speed: 2×', 'info'); break;
+        case '3': setSpeed(4); addToast('Speed: 4×', 'info'); break;
+        case '4': setSpeed(8); addToast('Speed: 8×', 'info'); break;
+
+        // ── Global ────────────────────────────────────────────
+        case 'Escape':
+          setAction(null);
           break;
 
         // ── Military ──────────────────────────────────────────
         case 'a':
+        case 'A':
           if (isPlanning && hasOrders) { setAction('attack'); setPendingMoveArmy(null); }
           break;
         case 'm':
+        case 'M':
           if (isPlanning && hasOrders) { setAction('move'); setPendingMoveArmy(null); }
           break;
 
         // ── Split army ────────────────────────────────────────
-        case 'x': {
+        case 'x':
+        case 'X': {
           if (!isPlanning) break;
           const pid = gameState.selectedProvinceId;
           if (!pid) { addToast('Select a province with your army first.', 'warning'); break; }
@@ -90,8 +148,9 @@ export default function GameBoard() {
           break;
         }
 
-        // ── Intel / scout (moved from S to I) ─────────────────
-        case 'i': {
+        // ── Intel / scout ──────────────────────────────────────
+        case 'i':
+        case 'I': {
           if (!isPlanning || !hasOrders) break;
           const pid = gameState.selectedProvinceId;
           if (pid) {
@@ -104,7 +163,8 @@ export default function GameBoard() {
         }
 
         // ── Recruit ───────────────────────────────────────────
-        case 'r': {
+        case 'r':
+        case 'R': {
           if (!isPlanning) break;
           const pid = gameState.selectedProvinceId;
           if (pid) {
@@ -116,26 +176,17 @@ export default function GameBoard() {
           break;
         }
 
-        // ── Focus selected — F: scroll to selected province ───
-        case 'f': {
-          if (gameState.selectedProvinceId) {
-            // Dispatch a custom event that MapView can listen to
-            window.dispatchEvent(new CustomEvent('focusProvince', {
-              detail: gameState.selectedProvinceId,
-            }));
-          }
-          break;
-        }
-
         // ── Diplomacy inbox: Y accept, N decline ──────────────
-        case 'y': {
+        case 'y':
+        case 'Y': {
           if (firstProposal) {
             acceptProposal(firstProposal.id);
             addToast(`Accepted proposal from ${gameState.kingdoms[firstProposal.fromKingdomId]?.name ?? '?'}.`, 'success');
           }
           break;
         }
-        case 'n': {
+        case 'n':
+        case 'N': {
           if (firstProposal) {
             declineProposal(firstProposal.id);
             addToast(`Declined proposal from ${gameState.kingdoms[firstProposal.fromKingdomId]?.name ?? '?'}.`, 'warning');
@@ -146,15 +197,24 @@ export default function GameBoard() {
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [isPlanning, gameState, endTurn, setAction, setPendingMoveArmy, queueAction, firstProposal, acceptProposal, declineProposal, addToast]);
+  }, [
+    isPlanning, gameState, setAction, setPendingMoveArmy, queueAction,
+    firstProposal, acceptProposal, declineProposal, addToast, togglePause, setSpeed,
+  ]);
 
-  const orders = gameState.ordersRemaining;
+  const orders    = gameState.ordersRemaining;
   const maxOrders = gameState.maxOrders;
 
   const recentEvents = gameState.turnLog
     .filter((e) => e.type !== 'economy')
     .slice(-8)
     .reverse();
+
+  // Derive season name from absolute season number
+  const seasonName = SEASON_NAMES[gameState.season % 4] ?? 'Unknown';
+
+  // How many armies are currently marching
+  const marchingCount = Object.keys(gameState.activeMovements ?? {}).length;
 
   return (
     <div className="h-screen w-screen flex flex-col overflow-hidden" style={{ background: '#080808' }}>
@@ -205,7 +265,7 @@ export default function GameBoard() {
         <div className="flex-1" />
 
         {/* Orders pips */}
-        <div className="flex gap-1 items-center" title={`${orders}/${maxOrders} Orders remaining. Campaign actions each cost 1. Domestic actions (Build/Recruit) are free.`}>
+        <div className="flex gap-1 items-center" title={`${orders}/${maxOrders} Orders remaining. Refreshes each season. Campaign actions each cost 1. Domestic actions (Build/Recruit) are free.`}>
           {Array.from({ length: maxOrders }).map((_, i) => (
             <div
               key={i}
@@ -223,8 +283,18 @@ export default function GameBoard() {
 
         <span className="text-gray-700">·</span>
         <span className="text-gray-400">
-          {SEASON_NAMES[gameState.season % 4]}, {gameState.year} BCE
+          {seasonName}, {gameState.year} BCE
+          <span className="text-gray-600 ml-1">
+            (Day {Math.floor(gameState.gameTimeDays)})
+          </span>
         </span>
+
+        {/* Marching indicator */}
+        {marchingCount > 0 && (
+          <span className="text-amber-500 animate-pulse text-xs" title="Armies marching">
+            ⚔ {marchingCount} marching
+          </span>
+        )}
 
         {/* Inbox badge */}
         {gameState.diplomaticInbox.filter((p) => p.status === 'pending').length > 0 && (
@@ -236,8 +306,9 @@ export default function GameBoard() {
           </span>
         )}
 
-        {gameState.phase === 'executing' && (
-          <span className="text-amber-400 animate-pulse font-medium">⚡ Resolving…</span>
+        {/* Pause indicator */}
+        {gameState.paused && gameState.phase !== 'season_summary' && (
+          <span className="text-yellow-400 font-medium">⏸ Paused</span>
         )}
       </div>
 
@@ -260,7 +331,7 @@ export default function GameBoard() {
                   key={t.id}
                   className={`text-xs px-3 py-1.5 rounded-lg shadow-xl font-medium animate-pulse-once
                     ${t.type === 'success' ? 'bg-green-900/90 text-green-300 border border-green-700'
-                    : t.type === 'danger' ? 'bg-red-900/90 text-red-300 border border-red-700'
+                    : t.type === 'danger'  ? 'bg-red-900/90 text-red-300 border border-red-700'
                     : t.type === 'warning' ? 'bg-amber-900/90 text-amber-300 border border-amber-700'
                     : 'bg-gray-900/90 text-gray-300 border border-gray-700'}`}
                 >
@@ -337,20 +408,19 @@ function HelpOverlay({ onDismiss }: { onDismiss: () => void }) {
     <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-[100] p-4">
       <div className="bg-gray-950 border border-gray-700 rounded-xl p-6 max-w-lg w-full shadow-2xl">
         <h2 className="text-xl font-bold gold mb-1">How to Play</h2>
-        <p className="text-xs text-gray-500 mb-4">Ancient Warring States — 475 BCE</p>
+        <p className="text-xs text-gray-500 mb-4">Ancient Warring States — 475 BCE — Real-time simulation</p>
         <div className="space-y-3 text-sm text-gray-300">
-          <HelpRow icon="📋" label="Orders system" desc="2 Orders per season for campaign actions: Attack, Move, Espionage, Diplomacy, Reform, Levy. Build and Recruit are free domestic actions (once per province per season)." />
-          <HelpRow icon="⚔" label="Attack (A)" desc="Press A, click your army's province, then hover an enemy province to see odds. Click to attack." />
-          <HelpRow icon="⇒" label="Move (M)" desc="Press M, click your army's province, then click a friendly adjacent province." />
-          <HelpRow icon="✂" label="Split Army (X)" desc="Split selected army 50/50 into two groups — useful for multi-front operations." />
-          <HelpRow icon="👥" label="Levy (L)" desc="Emergency manpower from a province. Costs gold and stability, has a 4-season cooldown." />
-          <HelpRow icon="🏗" label="Build & Recruit (R)" desc="Select your province in the right panel. Free — no Orders needed." />
-          <HelpRow icon="✉" label="Diplomacy inbox (Y/N)" desc="AI kingdoms send proposals. Press Y to accept the first one, N to decline. Or use the Diplomacy tab." />
-          <HelpRow icon="⚔" label="Breach treaties" desc="You can break any active NAP or tribute in the Diplomacy tab. Severe reputation penalty." />
-          <HelpRow icon="👑" label="Rulers" desc="Each kingdom has a ruler with military/diplomacy/admin stats. Rulers age and may die — their successor changes the kingdom's strategy." />
-          <HelpRow icon="▶" label="End Season (S or Enter)" desc="AI acts, economy updates, rulers may die. Your Orders reset." />
+          <HelpRow icon="⏸" label="Time controls" desc="Press Space to pause/resume. Keys 1/2/3/4 set speed (1×/2×/4×/8× — game-days per second). Use the bottom bar buttons too." />
+          <HelpRow icon="📋" label="Orders" desc="2 Orders per season, refreshing automatically each season. Campaign actions (Attack, Move, Espionage, Diplomacy, Reform, Levy) cost 1 Order. Build and Recruit are free domestic actions (once per province per season)." />
+          <HelpRow icon="⚔" label="Attack (A)" desc="Press A, click your army's province, then click an enemy province. Your army will march and battle on arrival. Watch the army dot animate across the map!" />
+          <HelpRow icon="⇒" label="Move (M)" desc="Press M, click your army's province, then click a friendly adjacent province. Movement takes 3–8 game-days depending on terrain." />
+          <HelpRow icon="✂" label="Split Army (X)" desc="Split selected army 50/50 — useful for multi-front operations." />
+          <HelpRow icon="👥" label="Levy (L)" desc="Emergency manpower from a province. Costs gold and stability, 4-season cooldown." />
+          <HelpRow icon="🏗" label="Build & Recruit (R)" desc="Select your province. Free — no Orders needed." />
+          <HelpRow icon="✉" label="Diplomacy inbox (Y/N)" desc="AI kingdoms send proposals. Press Y to accept the first one, N to decline." />
+          <HelpRow icon="👑" label="Rulers" desc="Each kingdom has a ruler with military/diplomacy/admin stats. Rulers age and die — successors change strategy." />
           <div className="border-t border-gray-800 pt-3 text-gray-500 text-xs">
-            <strong className="text-gray-400">Win:</strong> Control 60% of provinces (24+) or capture 3 enemy capitals. &nbsp;
+            <strong className="text-gray-400">Win:</strong> Control 60% of provinces or capture 3 enemy capitals. &nbsp;
             <strong className="text-gray-400">Lose:</strong> Your capital is captured or stability hits 0.
           </div>
         </div>

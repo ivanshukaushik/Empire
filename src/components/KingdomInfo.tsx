@@ -315,7 +315,7 @@ function RulerCard({ ruler }: { ruler: Ruler }) {
 
 // ── Military Tab ──────────────────────────────────────────────
 function MilitaryTab({ armies, totalTroops, gameState }: any) {
-  const armyCampaignUsed = gameState.armyCampaignUsed ?? {};
+  const activeMovements = gameState.activeMovements ?? {};
   const queueAction = useGameStore((s) => s.queueAction);
   const kid = gameState.playerKingdomId;
 
@@ -326,11 +326,13 @@ function MilitaryTab({ armies, totalTroops, gameState }: any) {
           <div className="text-gray-600 italic">No armies. Recruit troops at a barracks or capital.</div>
         ) : (
           armies.map((army: any) => {
-            const prov    = gameState.provinces[army.provinceId];
-            const acted   = !!armyCampaignUsed[army.id];
-            const moraleC = army.morale > 60 ? '#22c55e' : army.morale > 30 ? '#eab308' : '#ef4444';
-            const maxSize = army.maxSize ?? army.size;
-            const atMax   = army.size >= maxSize;
+            const prov      = gameState.provinces[army.provinceId];
+            const isMarching = !!activeMovements[army.id];
+            const moraleC   = army.morale > 60 ? '#22c55e' : army.morale > 30 ? '#eab308' : '#ef4444';
+            const maxSize   = army.maxSize ?? army.size;
+            const atMax     = army.size >= maxSize;
+            const mv        = activeMovements[army.id];
+            const destProv  = mv ? gameState.provinces[mv.toProvinceId] : null;
             return (
               <div key={army.id} className="border border-gray-800 rounded p-2 mb-1.5">
                 <div className="flex justify-between items-start">
@@ -338,17 +340,23 @@ function MilitaryTab({ armies, totalTroops, gameState }: any) {
                   <div className="flex items-center gap-1 shrink-0">
                     <span
                       className={`text-[9px] px-1 py-0.5 rounded font-bold uppercase ${
-                        acted ? 'bg-gray-800 text-gray-500' : 'bg-green-900/50 text-green-400'
+                        isMarching
+                          ? (mv?.isHostile ? 'bg-red-900/60 text-red-300' : 'bg-blue-900/50 text-blue-300')
+                          : 'bg-green-900/50 text-green-400'
                       }`}
                     >
-                      {acted ? 'Acted' : 'Ready'}
+                      {isMarching ? (mv?.isHostile ? '⚔ Attacking' : '→ Marching') : 'Ready'}
                     </span>
                     <span className="text-amber-400">{army.size.toLocaleString()}</span>
                   </div>
                 </div>
                 <div className="flex gap-3 mt-0.5 text-gray-500">
                   <span>Morale {army.morale}%</span>
-                  <span className="truncate">{prov?.name ?? '?'}</span>
+                  <span className="truncate">
+                    {isMarching && destProv
+                      ? `${prov?.name ?? '?'} → ${destProv.name}`
+                      : (prov?.name ?? '?')}
+                  </span>
                 </div>
                 {/* Morale bar */}
                 <div className="h-1 bg-gray-800 rounded mt-1.5 overflow-hidden">
@@ -361,7 +369,7 @@ function MilitaryTab({ armies, totalTroops, gameState }: any) {
                   </div>
                 )}
                 {/* Split button */}
-                {army.size >= 2000 && !acted && (
+                {army.size >= 2000 && !isMarching && (
                   <button
                     className="mt-1.5 w-full text-[9px] py-0.5 rounded bg-gray-800 border border-gray-700 text-gray-400 hover:bg-gray-700"
                     onClick={() => queueAction({ type: 'split_army', apCost: 0, armyId: army.id, splitFraction: 0.5 })}

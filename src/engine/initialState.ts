@@ -89,6 +89,13 @@ export function createInitialState(seed: number, playerKingdomId: string): GameS
   // Fog of war: compute from player kingdom
   const fogOfWar = computeInitialFog(playerKingdomId, provinces);
 
+  // Build initial AI planning schedule: stagger each kingdom's first planning
+  const allKingdomIds = Object.keys(kingdoms);
+  const nextAiPlanAtDays: Record<string, number> = {};
+  allKingdomIds.forEach((kid, i) => {
+    nextAiPlanAtDays[kid] = i * 2; // stagger 2 days apart so they don't all fire at day 0
+  });
+
   const state: GameState = {
     seed,
     season: 1,
@@ -117,6 +124,14 @@ export function createInitialState(seed: number, playerKingdomId: string): GameS
     diplomaticInbox: [],
     rulerEvents: [],
     toastMessages: [],
+    // Continuous-time fields
+    gameTimeDays:     0,
+    paused:           false,
+    speed:            1,
+    activeMovements:  {},
+    nextAiPlanAtDays,
+    recentBattles:    [],
+    lastEconomyAtDays: 0,
   };
 
   return state;

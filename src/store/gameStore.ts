@@ -2,9 +2,10 @@ import { create } from 'zustand';
 import { immer } from 'zustand/middleware/immer';
 import { GameState, PlayerAction, ActionType, DiploProposal } from '../engine/types';
 import { createInitialState } from '../engine/initialState';
-import { validateAction, applyPlayerAction, executeTurn, isCampaignAction } from '../engine/turnEngine';
+import { validateAction, applyPlayerAction, isCampaignAction } from '../engine/turnEngine';
 import { createRng } from '../engine/rng';
 import { forceAcceptNAP, breachTreaty, deepCopyRelations } from '../engine/diplomacy';
+import { simulateTick } from '../engine/simulateTick';
 import { resolveSeed } from '../config';
 
 // ============================================================
@@ -15,32 +16,31 @@ interface GameStore {
   gameState: GameState | null;
   actionFeedback: string | null;
 
-  newGame: (seed: number, playerKingdomId: string) => void;
-  queueAction: (action: Omit<PlayerAction, 'id'>) => void;
-  endTurn: () => void;
-  dismissSummary: () => void;
-  saveGame: () => void;
-  loadGame: () => boolean;
-  setSelectedProvince: (provinceId: string | null) => void;
-  setActionBeingPlanned: (actionType: ActionType | null) => void;
-  setPendingMoveArmy: (armyId: string | null) => void;
-  clearFeedback: () => void;
-  resetGame: () => void;
-  dismissHelp: () => void;
-
-  /** Accept an inbound diplomatic proposal */
-  acceptProposal: (proposalId: string) => void;
-  /** Decline an inbound diplomatic proposal */
-  declineProposal: (proposalId: string) => void;
-  /** Breach an active treaty with another kingdom */
-  breachTreatyWith: (targetKingdomId: string) => void;
+  newGame:              (seed: number, playerKingdomId: string) => void;
+  queueAction:          (action: Omit<PlayerAction, 'id'>) => void;
+  /** Advance the simulation by the given number of whole game-days. */
+  tick:                 (days: number) => void;
+  togglePause:          () => void;
+  setSpeed:             (speed: 1 | 2 | 4 | 8) => void;
+  dismissSummary:       () => void;
+  saveGame:             () => void;
+  loadGame:             () => boolean;
+  setSelectedProvince:  (provinceId: string | null) => void;
+  setActionBeingPlanned:(actionType: ActionType | null) => void;
+  setPendingMoveArmy:   (armyId: string | null) => void;
+  clearFeedback:        () => void;
+  resetGame:            () => void;
+  dismissHelp:          () => void;
+  acceptProposal:       (proposalId: string) => void;
+  declineProposal:      (proposalId: string) => void;
+  breachTreatyWith:     (targetKingdomId: string) => void;
 }
 
-const SAVE_KEY = 'warring-states-v3-save';
+const SAVE_KEY = 'warring-states-v4-save';
 
 export const useGameStore = create<GameStore>()(
   immer((set, get) => ({
-    gameState: null,
+    gameState:      null,
     actionFeedback: null,
 
     newGame: (seed, playerKingdomId) => {
@@ -48,6 +48,43 @@ export const useGameStore = create<GameStore>()(
       set({ gameState: state, actionFeedback: null });
     },
 
+    // ── Simulation tick ──────────────────────────────────────
+    tick: (days) => {
+      const { gameState } = get();
+      if (!gameState) return;
+      if (gameState.isGameOver) return;
+      if (gameState.paused) return;
+      if (gameState.phase === 'season_summary') return;
+
+      const rng = createRng(
+        gameState.seed + Math.floor(gameState.gameTimeDays * 1000)
+      );
+
+      let s = gameState;
+      const cap = Math.min(days, 60); // safety cap — never jump more than 60 days at once
+      for (let i = 0; i < cap; i++) {
+        s = simulateTick(s, 1, rng);
+        if (s.isGameOver || s.phase === 'season_summary') break;
+      }
+
+      set({ gameState: s });
+    },
+
+    togglePause: () => {
+      set((draft) => {
+        if (!draft.gameState) return;
+        draft.gameState.paused = !draft.gameState.paused;
+      });
+    },
+
+    setSpeed: (speed) => {
+      set((draft) => {
+        if (!draft.gameState) return;
+        draft.gameState.speed = speed;
+      });
+    },
+
+    // ── Player actions ───────────────────────────────────────
     queueAction: (actionDef) => {
       const { gameState } = get();
       if (!gameState) return;
@@ -72,14 +109,14 @@ export const useGameStore = create<GameStore>()(
       set({
         gameState: {
           ...newState,
-          pendingPlayerActions: [...newState.pendingPlayerActions, action],
-          actionBeingPlanned: null,
-          pendingMoveArmyId: null,
+          pendingPlayerActions: [...(newState.pendingPlayerActions ?? []), action],
+          actionBeingPlanned:   null,
+          pendingMoveArmyId:    null,
           turnLog: [
             ...newState.turnLog,
             {
-              season: newState.season,
-              type: 'player',
+              season:    newState.season,
+              type:      'player' as const,
               message,
               kingdomId: gameState.playerKingdomId,
             },
@@ -89,44 +126,17 @@ export const useGameStore = create<GameStore>()(
       });
     },
 
-    endTurn: () => {
-      const { gameState } = get();
-      if (!gameState) return;
-      if (gameState.phase !== 'player_planning') return;
-
-      set({
-        gameState: {
-          ...gameState,
-          phase: 'executing',
-          actionBeingPlanned: null,
-          pendingMoveArmyId: null,
-        },
-      });
-
-      requestAnimationFrame(() => {
-        setTimeout(() => {
-          const { gameState: current } = get();
-          if (!current) return;
-          try {
-            const newState = executeTurn(current);
-            set({ gameState: newState });
-          } catch (err) {
-            console.error('[endTurn] executeTurn threw — resetting to player_planning:', err);
-            set({
-              gameState: { ...current, phase: 'player_planning' },
-              actionFeedback: '⚠ Season resolution failed — check the console for details.',
-            });
-          }
-        }, 0);
-      });
-    },
-
     dismissSummary: () => {
       const { gameState } = get();
       if (!gameState) return;
       if (gameState.phase === 'season_summary') {
         set({
-          gameState: { ...gameState, phase: 'player_planning', seasonSummary: null },
+          gameState: {
+            ...gameState,
+            phase:         'player_planning',
+            paused:        false,  // resume after dismissing summary
+            seasonSummary: null,
+          },
           actionFeedback: null,
         });
       }
@@ -138,7 +148,7 @@ export const useGameStore = create<GameStore>()(
       try {
         localStorage.setItem(
           SAVE_KEY,
-          JSON.stringify({ version: '3.0', savedAt: new Date().toISOString(), state: gameState })
+          JSON.stringify({ version: '4.0', savedAt: new Date().toISOString(), state: gameState })
         );
       } catch (e) {
         console.error('Save failed:', e);
@@ -148,13 +158,14 @@ export const useGameStore = create<GameStore>()(
     loadGame: () => {
       try {
         const raw = localStorage.getItem(SAVE_KEY)
+          ?? localStorage.getItem('warring-states-v3-save')
           ?? localStorage.getItem('warring-states-v2-save')
           ?? localStorage.getItem('warring-states-v1-save');
         if (!raw) return false;
         const save = JSON.parse(raw);
         if (!save?.state) return false;
         const loaded = save.state as Partial<GameState>;
-        // Build migrated state with safe defaults and field migrations
+
         const migratedKingdoms = Object.fromEntries(
           Object.entries((loaded.kingdoms ?? {}) as Record<string, any>).map(([k, v]) => [
             k, { treatyBreachCount: 0, ...v },
@@ -176,17 +187,38 @@ export const useGameStore = create<GameStore>()(
             ),
           ])
         );
+
+        // Build nextAiPlanAtDays for kingdoms that don't have it
+        const loadedNextPlan = (loaded as any).nextAiPlanAtDays ?? {};
+        const gameTimeDays = (loaded as any).gameTimeDays ?? 0;
+        const allKids = Object.keys(migratedKingdoms);
+        const nextAiPlanAtDays: Record<string, number> = {};
+        allKids.forEach((kid, i) => {
+          nextAiPlanAtDays[kid] = loadedNextPlan[kid] ?? gameTimeDays + i * 2;
+        });
+
         const migrated: GameState = {
-          ordersRemaining: 2,
-          maxOrders: 2,
+          ordersRemaining:      2,
+          maxOrders:            2,
           provinceDomesticUsed: {},
-          armyCampaignUsed: {},
-          rulerEvents: [],
-          toastMessages: [],
+          armyCampaignUsed:     {},
+          pendingPlayerActions: [],
+          rulerEvents:          [],
+          toastMessages:        [],
+          // Continuous-time defaults for old saves
+          gameTimeDays:         0,
+          paused:               true,  // load paused so player can orient
+          speed:                1,
+          activeMovements:      {},
+          nextAiPlanAtDays,
+          recentBattles:        [],
+          lastEconomyAtDays:    0,
           ...loaded,
-          kingdoms: migratedKingdoms,
-          diplomaticInbox: migratedInbox,
-          relations: migratedRelations,
+          kingdoms:         migratedKingdoms,
+          diplomaticInbox:  migratedInbox,
+          relations:        migratedRelations,
+          // Ensure loaded game resumes in valid phase
+          phase: (loaded.phase === 'executing' ? 'player_planning' : loaded.phase) as any,
         } as GameState;
         set({ gameState: migrated });
         return true;
@@ -226,12 +258,6 @@ export const useGameStore = create<GameStore>()(
       });
     },
 
-    /**
-     * Accept an inbound diplomatic proposal.
-     * FIX: For nap_offer, we use forceAcceptNAP — the AI has already expressed
-     * desire for peace by sending the proposal; we should NOT re-roll the
-     * probability (which could silently fail and confuse the player).
-     */
     acceptProposal: (proposalId) => {
       const { gameState } = get();
       if (!gameState) return;
@@ -243,14 +269,12 @@ export const useGameStore = create<GameStore>()(
       let message = '';
 
       if (proposal.type === 'nap_offer') {
-        // FIXED: force-accept — the AI already sent this proposal, don't re-roll
         const result = forceAcceptNAP(newState, kid, proposal.fromKingdomId);
         newState = result.newState;
         message = `Non-Aggression Pact accepted with ${gameState.kingdoms[proposal.fromKingdomId]?.name}.`;
       } else if (proposal.type === 'tribute_demand') {
-        // AI pays us tribute
         const amount = proposal.tributeAmount ?? 10;
-        const fromK = { ...newState.kingdoms[proposal.fromKingdomId] };
+        const fromK  = { ...newState.kingdoms[proposal.fromKingdomId] };
         fromK.treasury = Math.max(0, fromK.treasury - amount);
         const playerK = { ...newState.kingdoms[kid] };
         playerK.treasury += amount;
@@ -263,12 +287,11 @@ export const useGameStore = create<GameStore>()(
         }
         newState = {
           ...newState,
-          kingdoms: { ...newState.kingdoms, [proposal.fromKingdomId]: fromK, [kid]: playerK },
+          kingdoms:  { ...newState.kingdoms, [proposal.fromKingdomId]: fromK, [kid]: playerK },
           relations: newRelations,
         };
         message = `Accepted tribute from ${gameState.kingdoms[proposal.fromKingdomId]?.name}: +${amount} gold.`;
       } else if (proposal.type === 'mutual_target') {
-        // Soft pact: improve relations with proposer
         const fromName = gameState.kingdoms[proposal.fromKingdomId]?.name ?? '';
         const newRelations = deepCopyRelations(newState.relations);
         if (newRelations[kid]?.[proposal.fromKingdomId]) {
@@ -284,7 +307,6 @@ export const useGameStore = create<GameStore>()(
         message = `Agreed to coordinate with ${fromName} against ${targetName}.`;
       }
 
-      // Mark proposal accepted and remove from inbox
       newState = {
         ...newState,
         diplomaticInbox: newState.diplomaticInbox
@@ -302,10 +324,8 @@ export const useGameStore = create<GameStore>()(
       const proposal = gameState.diplomaticInbox.find((p) => p.id === proposalId);
       if (!proposal) return;
 
-      const kid = gameState.playerKingdomId;
+      const kid    = gameState.playerKingdomId;
       const fromName = gameState.kingdoms[proposal.fromKingdomId]?.name ?? '';
-
-      // Small relations penalty for declining
       const newRelations = deepCopyRelations(gameState.relations);
       if (newRelations[kid]?.[proposal.fromKingdomId]) {
         newRelations[kid][proposal.fromKingdomId].score = Math.max(
@@ -314,7 +334,7 @@ export const useGameStore = create<GameStore>()(
         );
       }
 
-      const message = `Declined proposal from ${fromName}.`;
+      const message  = `Declined proposal from ${fromName}.`;
       const newState = {
         ...gameState,
         relations: newRelations,
@@ -332,17 +352,15 @@ export const useGameStore = create<GameStore>()(
       if (!gameState) return;
 
       const { newState, message } = breachTreaty(gameState, gameState.playerKingdomId, targetKingdomId);
-      const logEntry = {
-        season: newState.season,
-        type: 'diplomacy' as const,
-        message,
-        kingdomId: gameState.playerKingdomId,
-      };
-
       set({
         gameState: {
           ...newState,
-          turnLog: [...newState.turnLog, logEntry],
+          turnLog: [...newState.turnLog, {
+            season:    newState.season,
+            type:      'diplomacy' as const,
+            message,
+            kingdomId: gameState.playerKingdomId,
+          }],
         },
         actionFeedback: message,
       });
