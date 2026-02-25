@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useGameStore } from '../store/gameStore';
 import { SEASON_NAMES } from '../engine/turnEngine';
-import { provinceIncome, provinceFood, provinceManpower } from '../engine/economy';
+import { provinceIncome, provinceFood, provinceManpower, computeRates } from '../engine/economy';
 import { StatTooltip } from './Tooltip';
 import { BREACH_CONSEQUENCES } from '../engine/diplomacy';
 import type { Ruler } from '../engine/types';
@@ -37,6 +37,9 @@ export default function KingdomInfo() {
   const upkeepFood   = myArmies.reduce((s, a) => s + (a.size / 1000) * 0.8, 0);
   const netGold      = forecastGold - upkeepGold - (player.activeReform === 'propaganda' ? 5 : 0);
   const netFood      = forecastFood - upkeepFood;
+  // Part B: per-day rates for display
+  const rates        = computeRates(gameState, kid);
+  const mpPerDayDisp = rates.manpowerPerDay.toFixed(2);
 
   const inboxCount = gameState.diplomaticInbox.filter((p) => p.status === 'pending').length;
 
@@ -104,6 +107,7 @@ export default function KingdomInfo() {
             upkeepGold={upkeepGold}
             upkeepFood={upkeepFood}
             forecastManpower={forecastManpower}
+            mpPerDay={mpPerDayDisp}
           />
         )}
         {tab === 'military' && (
@@ -168,7 +172,7 @@ export default function KingdomInfo() {
 }
 
 // ── Overview Tab ──────────────────────────────────────────────
-function OverviewTab({ player, gameState, ownedProvs, totalProvs, winTarget, progress, netGold, netFood, forecastGold, forecastFood, upkeepGold, upkeepFood, forecastManpower }: any) {
+function OverviewTab({ player, gameState, ownedProvs, totalProvs, winTarget, progress, netGold, netFood, forecastGold, forecastFood, upkeepGold, upkeepFood, forecastManpower, mpPerDay }: any) {
   return (
     <>
       {/* Ruler card */}
@@ -187,9 +191,9 @@ function OverviewTab({ player, gameState, ownedProvs, totalProvs, winTarget, pro
           tip="Feeds armies. Shortage → morale drops and troops die."
         />
         <ResourceRow
-          icon="⚔" label="Manpower" value={`${Math.floor(player.manpower)} (+${forecastManpower}/s)`}
+          icon="⚔" label="Manpower" value={`${Math.floor(player.manpower)} (+${mpPerDay}/day)`}
           color="text-blue-400"
-          tip="Pool for recruiting. Auto-replenishes from provinces each season. Levy adds instantly."
+          tip={`Manpower pool for recruiting. Accrues ${mpPerDay} per day from provinces. Levy adds instantly.`}
         />
         <ResourceRow
           icon="⚖" label="Stability" value={player.stability}

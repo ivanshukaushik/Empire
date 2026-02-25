@@ -91,6 +91,14 @@ export interface Province {
   levyCooldownUntil?: number;
   x: number;
   y: number;
+  // ── Part A: Project Slots ──────────────────────────────────
+  activeProjects?: Project[];
+  projectSlotsBase?: number;   // default 1
+  // ── Part B: Population ────────────────────────────────────
+  population?: number;          // in thousands, drives manpower rate
+  // ── Part E: Admin & Resources ─────────────────────────────
+  adminCost?: number;           // default 1 (capital = 2)
+  hasHorses?: boolean;
 }
 
 export interface Army {
@@ -145,6 +153,9 @@ export interface Kingdom {
   ruler?: Ruler;
   /** How many times this kingdom has broken treaties (affects AI trust) */
   treatyBreachCount: number;
+  // ── Part E: Admin Capacity ────────────────────────────────
+  adminCapacity?: number;      // default 10; overextension if Σ adminCost > this
+  adminTechLevel?: number;     // 0 = base; 1 = unlocks 2nd project slot + +4 adminCapacity
 }
 
 export interface RelationData {
@@ -195,6 +206,28 @@ export interface PlayerAction {
   recruitAmount?: number;   // manpower points to spend
   levyAmount?: number;      // manpower points to levy
   splitFraction?: number;   // 0.25 | 0.5 | 0.75 for split_army
+}
+
+/** A timed construction project queued in a province. */
+export interface Project {
+  id: string;
+  kind: BuildingType;
+  startedAtDays: number;
+  durationDays: number;
+  costGold: number;
+}
+
+/** An entry in the persistent War Ledger event feed. */
+export interface LedgerEvent {
+  id: string;
+  type: 'battle' | 'treaty' | 'elimination' | 'succession' | 'economy';
+  dayResolved: number;
+  season: number;
+  message: string;
+  provinceId?: string;
+  attackerKingdomId?: string;
+  defenderKingdomId?: string;
+  attackerWon?: boolean;
 }
 
 export interface BattleResult {
@@ -278,6 +311,13 @@ export interface RecentBattle {
   attackerWon: boolean;
   resolvedAtDays: number;
   narrative: string;
+  // Battle stats stored for War Ledger / Season Summary (Part D fix)
+  attackerPower: number;
+  defenderPower: number;
+  attackerLosses: number;
+  defenderLosses: number;
+  attackerInitialStrength: number;
+  defenderInitialStrength: number;
 }
 
 export interface ToastMessage {
@@ -298,12 +338,13 @@ export interface GameState {
   relations: Record<string, Record<string, RelationData>>;
   playerKingdomId: string;
 
-  // ── Orders system (refreshed automatically at each season boundary) ──
+  // ── Orders system (legacy fields kept for save migration) ──────────
   ordersRemaining: number;
   maxOrders: number;
-  provinceDomesticUsed: Record<string, boolean>;
+  /** @deprecated Replaced by Province.activeProjects (Part A). Kept for save migration. */
+  provinceDomesticUsed?: Record<string, boolean>;
   /** @deprecated Use activeMovements to determine if an army is busy */
-  armyCampaignUsed: Record<string, boolean>;
+  armyCampaignUsed?: Record<string, boolean>;
 
   pendingPlayerActions: PlayerAction[];
   fogOfWar: Record<string, FogOfWarEntry>;
@@ -341,4 +382,6 @@ export interface GameState {
   recentBattles: RecentBattle[];
   /** gameTimeDays when the last economy phase ran (runs every 90 days). */
   lastEconomyAtDays: number;
+  /** Persistent event feed — last 100 notable events. */
+  warLedger?: LedgerEvent[];
 }

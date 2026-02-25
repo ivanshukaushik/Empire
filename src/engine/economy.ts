@@ -1,4 +1,12 @@
 import { GameState, Kingdom, Province, Army } from './types';
+
+// Project durations (days) — used by turnEngine and simulateTick
+export const PROJECT_DURATIONS: Record<string, number> = {
+  farm:     5,
+  market:   7,
+  barracks: 10,
+  fort:     6,
+};
 import { getRulerCombatBonus, getRulerIncomeBonus } from './ruler';
 
 // Upkeep: per 1000 troops per season
@@ -119,6 +127,41 @@ export function autoReplenishArmies(
   return { newArmies, manpowerUsed };
 }
 
+/**
+ * Compute per-day resource rates for a kingdom.
+ * Used by the UI to show "+X/day" forecasts and by simulateTick for per-day manpower.
+ */
+export function computeRates(
+  state: GameState,
+  kingdomId?: string
+): { goldPerDay: number; foodPerDay: number; manpowerPerDay: number } {
+  const kid = kingdomId ?? state.playerKingdomId;
+  const k = state.kingdoms[kid];
+  if (!k || k.isEliminated) return { goldPerDay: 0, foodPerDay: 0, manpowerPerDay: 0 };
+
+  const ownedProvs = Object.values(state.provinces).filter((p) => p.owner === kid);
+  let totalGold = 0;
+  let totalFood = 0;
+  let totalMp   = 0;
+
+  for (const p of ownedProvs) {
+    totalGold += provinceIncome(p, k);
+    totalFood += provinceFood(p, k, state.season);
+    totalMp   += provinceManpower(p, k);
+  }
+
+  // Army upkeep per season → offset daily gold/food
+  const myArmies = Object.values(state.armies).filter((a) => a.kingdomId === kid);
+  const upkeepGold = myArmies.reduce((s, a) => s + (a.size / 1000) * 0.4 * k.armyCostModifier, 0);
+  const upkeepFood = myArmies.reduce((s, a) => s + (a.size / 1000) * 0.8, 0);
+
+  return {
+    goldPerDay:      (totalGold - upkeepGold) / 90,
+    foodPerDay:      (totalFood - upkeepFood) / 90,
+    manpowerPerDay:  totalMp * 0.2 / 90,
+  };
+}
+
 export function economyPhase(
   state: GameState
 ): { newState: GameState; lines: string[] } {
@@ -161,17 +204,26 @@ export function economyPhase(
     k.treasury = Math.max(-50, k.treasury + totalGold - goldUpkeepTotal);
     k.food = Math.max(0, k.food + totalFood - foodUpkeepTotal);
 
-    // 4. Manpower replenishment (from provinces)
-    const newManpower = Math.min(100, k.manpower + Math.floor(totalManpower * 0.2));
-
-    // 5. Auto-replenishment: armies recover in friendly territory
+    // 4. Manpower now accrues daily in simulateTick (per-day regen).
+    //    At season boundary we only run auto-replenishment from the accumulated pool.
     const replenishResult = autoReplenishArmies(newArmies, state.provinces, {
       id: kid,
-      manpower: newManpower,
+      manpower: k.manpower,
       food: k.food,
     });
     newArmies = replenishResult.newArmies;
-    k.manpower = Math.max(0, newManpower - replenishResult.manpowerUsed);
+    k.manpower = Math.max(0, k.manpower - replenishResult.manpowerUsed);
+
+    // 5. Overextension penalty (Part E): adminCost > adminCapacity → −15% net income
+    const adminCapacity  = k.adminCapacity ?? 10;
+    const totalAdminCost = Object.values(state.provinces)
+      .filter((p) => p.owner === kid)
+      .reduce((s, p) => s + (p.adminCost ?? 1), 0);
+    if (totalAdminCost > adminCapacity) {
+      const overextPenalty = Math.floor(totalGold * 0.15);
+      k.treasury = Math.max(-50, k.treasury - overextPenalty);
+      lines.push(`${k.name} is overextended (${totalAdminCost}/${adminCapacity} admin)! Tax income −15%.`);
+    }
 
     // 6. Stability adjustments
     if (k.treasury < 0) {

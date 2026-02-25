@@ -42,6 +42,14 @@ export function createInitialState(seed: number, playerKingdomId: string): GameS
       hasMarket: false,
       hasBarracks: def.isCapital, // capitals start with barracks
       hasSpyNetwork: false,
+      // Part A: Project Slots
+      activeProjects: [],
+      projectSlotsBase: 1,
+      // Part B: Population (thousands) — drives per-day manpower rate
+      population: def.baseManpower * 100,
+      // Part E: Admin & Strategic Resources
+      adminCost: def.isCapital ? 2 : 1,
+      hasHorses: false,
     };
   }
 
@@ -59,6 +67,9 @@ export function createInitialState(seed: number, playerKingdomId: string): GameS
         : undefined,
       ruler,
       treatyBreachCount: 0,
+      // Part E: Admin capacity
+      adminCapacity: 10,
+      adminTechLevel: 0,
     };
   }
 
@@ -132,6 +143,7 @@ export function createInitialState(seed: number, playerKingdomId: string): GameS
     nextAiPlanAtDays,
     recentBattles:    [],
     lastEconomyAtDays: 0,
+    warLedger:        [],
   };
 
   return state;

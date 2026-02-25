@@ -40,13 +40,17 @@ export default function ProvinceInfo() {
   const isPartial  = fog?.partial;
   const isOwned    = province.owner === gameState.playerKingdomId;
   const ownerK     = gameState.kingdoms[province.owner];
-  const playerK    = gameState.kingdoms[gameState.playerKingdomId];
+  const player     = gameState.kingdoms[gameState.playerKingdomId];
   const rel        = gameState.relations[gameState.playerKingdomId]?.[province.owner];
   const hasNAP     = rel?.treaty?.type === 'nap';
   const isPlanning = gameState.phase === 'player_planning';
-  const provDomesticUsed = !!(gameState.provinceDomesticUsed?.[pid]);
+  // Part A: compute project slot usage
+  const activeProjs = province.activeProjects ?? [];
+  const totalSlots  = (province.projectSlotsBase ?? 1) + ((player?.adminTechLevel ?? 0) >= 1 ? 1 : 0);
+  const usedSlots   = activeProjs.length;
+  const hasFreeSlot = usedSlots < totalSlots;
 
-  const armiesHere      = Object.values(gameState.armies).filter((a) => a.provinceId === pid);
+  const armiesHere       = Object.values(gameState.armies).filter((a) => a.provinceId === pid);
   const playerArmiesHere = armiesHere.filter((a) => a.kingdomId === gameState.playerKingdomId);
 
   return (
@@ -214,24 +218,46 @@ export default function ProvinceInfo() {
                 )}
 
                 {/* Build */}
-                <ActionGroup label={provDomesticUsed ? 'Build (slot used this season)' : 'Build'}>
+                <ActionGroup label={`Build (${usedSlots}/${totalSlots} slots)`}>
+                  {/* Active projects */}
+                  {activeProjs.length > 0 && (
+                    <div className="mb-1 space-y-0.5">
+                      {activeProjs.map((proj) => {
+                        const remaining = Math.max(0, Math.ceil(proj.startedAtDays + proj.durationDays - gameState.gameTimeDays));
+                        return (
+                          <div key={proj.id} className="text-[10px] text-amber-500 flex justify-between">
+                            <span>🏗 {proj.kind}</span>
+                            <span>{remaining}d left</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                   <div className="grid grid-cols-2 gap-1">
-                    <ActionBtn disabled={provDomesticUsed || province.hasFarm}
-                      onClick={() => queueAction({ type: 'build', apCost: 0, provinceId: pid, buildingType: 'farm' })}>
-                      {province.hasFarm ? <s className="text-gray-600">🌱 Farm</s> : '🌱 Farm'}
-                    </ActionBtn>
-                    <ActionBtn disabled={provDomesticUsed || province.hasMarket}
-                      onClick={() => queueAction({ type: 'build', apCost: 0, provinceId: pid, buildingType: 'market' })}>
-                      {province.hasMarket ? <s className="text-gray-600">🏪 Market</s> : '🏪 Market'}
-                    </ActionBtn>
-                    <ActionBtn disabled={provDomesticUsed || province.hasBarracks}
-                      onClick={() => queueAction({ type: 'build', apCost: 0, provinceId: pid, buildingType: 'barracks' })}>
-                      {province.hasBarracks ? <s className="text-gray-600">🏛 Barracks</s> : '🏛 Barracks'}
-                    </ActionBtn>
-                    <ActionBtn disabled={provDomesticUsed || province.fortLevel >= 3}
-                      onClick={() => queueAction({ type: 'build', apCost: 0, provinceId: pid, buildingType: 'fort' })}>
-                      🏯 Fort {province.fortLevel}/3
-                    </ActionBtn>
+                    {(() => {
+                      const farmQueued  = activeProjs.some((p) => p.kind === 'farm');
+                      const mktQueued   = activeProjs.some((p) => p.kind === 'market');
+                      const brkQueued   = activeProjs.some((p) => p.kind === 'barracks');
+                      const fortQueued  = activeProjs.some((p) => p.kind === 'fort');
+                      return (<>
+                        <ActionBtn disabled={!hasFreeSlot || province.hasFarm || farmQueued}
+                          onClick={() => queueAction({ type: 'build', apCost: 0, provinceId: pid, buildingType: 'farm' })}>
+                          {province.hasFarm ? <s className="text-gray-600">🌱 Farm</s> : farmQueued ? '🏗 Farm…' : '🌱 Farm'}
+                        </ActionBtn>
+                        <ActionBtn disabled={!hasFreeSlot || province.hasMarket || mktQueued}
+                          onClick={() => queueAction({ type: 'build', apCost: 0, provinceId: pid, buildingType: 'market' })}>
+                          {province.hasMarket ? <s className="text-gray-600">🏪 Market</s> : mktQueued ? '🏗 Market…' : '🏪 Market'}
+                        </ActionBtn>
+                        <ActionBtn disabled={!hasFreeSlot || province.hasBarracks || brkQueued}
+                          onClick={() => queueAction({ type: 'build', apCost: 0, provinceId: pid, buildingType: 'barracks' })}>
+                          {province.hasBarracks ? <s className="text-gray-600">🏛 Barracks</s> : brkQueued ? '🏗 Barracks…' : '🏛 Barracks'}
+                        </ActionBtn>
+                        <ActionBtn disabled={!hasFreeSlot || province.fortLevel >= 3 || fortQueued}
+                          onClick={() => queueAction({ type: 'build', apCost: 0, provinceId: pid, buildingType: 'fort' })}>
+                          {fortQueued ? '🏗 Fort…' : `🏯 Fort ${province.fortLevel}/3`}
+                        </ActionBtn>
+                      </>);
+                    })()}
                   </div>
                 </ActionGroup>
 
@@ -242,8 +268,8 @@ export default function ProvinceInfo() {
 
                 {/* Recruit */}
                 {(province.hasBarracks || province.isCapital) && (
-                  <ActionGroup label={provDomesticUsed ? 'Recruit (slot used)' : 'Recruit'}>
-                    <RecruitWidget provinceId={pid} provDomesticUsed={provDomesticUsed} />
+                  <ActionGroup label="Recruit">
+                    <RecruitWidget provinceId={pid} />
                   </ActionGroup>
                 )}
               </>
@@ -382,7 +408,7 @@ function LevyWidget({ provinceId, province, season }: { provinceId: string; prov
   );
 }
 
-function RecruitWidget({ provinceId, provDomesticUsed }: { provinceId: string; provDomesticUsed: boolean }) {
+function RecruitWidget({ provinceId }: { provinceId: string }) {
   const [amount, setAmount] = useState(3);
   const queueAction = useGameStore((s) => s.queueAction);
   const gameState   = useGameStore((s) => s.gameState!);
@@ -404,7 +430,7 @@ function RecruitWidget({ provinceId, provDomesticUsed }: { provinceId: string; p
         </select>
       </div>
       <ActionBtn
-        disabled={provDomesticUsed || player.manpower < amount || player.treasury < goldCost}
+        disabled={player.manpower < amount || player.treasury < goldCost}
         onClick={() => queueAction({ type: 'recruit', apCost: 0, provinceId, recruitAmount: amount })}
       >
         Recruit {troops} troops — {goldCost}g, {amount}mp

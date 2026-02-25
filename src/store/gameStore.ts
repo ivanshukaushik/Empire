@@ -213,6 +213,7 @@ export const useGameStore = create<GameStore>()(
           nextAiPlanAtDays,
           recentBattles:        [],
           lastEconomyAtDays:    0,
+          warLedger:            [],
           ...loaded,
           kingdoms:         migratedKingdoms,
           diplomaticInbox:  migratedInbox,

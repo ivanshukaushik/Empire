@@ -10,9 +10,11 @@ import {
   DiploProposal,
   RulerSuccessionEvent,
   ArmyMovement,
+  Project,
 } from './types';
 import { createRng, rollFloat } from './rng';
 import { resolveBattle, AttackOrder } from './combat';
+import { PROJECT_DURATIONS } from './economy';
 import { economyPhase, getReformModifiers } from './economy';
 import { diplomacyPhase, proposeNAP, offerTribute } from './diplomacy';
 import { resolveEspionage } from './espionage';
@@ -78,14 +80,26 @@ export function validateAction(
   const kid = state.playerKingdomId;
   const kingdom = state.kingdoms[kid];
 
-  // ── Domestic slot check (build/recruit) ───────────────────
-  if (DOMESTIC_ACTIONS.has(action.type)) {
+  // ── Project slot check for build actions ──────────────────
+  if (action.type === 'build') {
     const pid = action.provinceId;
-    if (pid && state.provinceDomesticUsed[pid]) {
-      return {
-        valid: false,
-        reason: `${state.provinces[pid]?.name ?? 'This province'} has already used its domestic action this season.`,
-      };
+    if (pid) {
+      const prov = state.provinces[pid];
+      if (prov) {
+        const slots = (prov.projectSlotsBase ?? 1) + ((state.kingdoms[state.playerKingdomId]?.adminTechLevel ?? 0) >= 1 ? 1 : 0);
+        const active = (prov.activeProjects ?? []).length;
+        if (active >= slots) {
+          return {
+            valid: false,
+            reason: `${prov.name} has no free project slots (${active}/${slots} used). Wait for current projects to complete.`,
+          };
+        }
+        // Check not already building same type
+        const alreadyQueued = (prov.activeProjects ?? []).some((p) => p.kind === action.buildingType);
+        if (alreadyQueued) {
+          return { valid: false, reason: `${action.buildingType} is already under construction here.` };
+        }
+      }
     }
   }
 
@@ -228,15 +242,7 @@ export function applyPlayerAction(
 
   let newState: GameState = { ...state };
 
-  // (Move/attack no longer mark armyCampaignUsed — activeMovements is the lock)
-
-  // Mark province domestic slot used (build/recruit/levy)
-  if ((DOMESTIC_ACTIONS.has(action.type) || action.type === 'levy') && action.provinceId) {
-    newState = {
-      ...newState,
-      provinceDomesticUsed: { ...newState.provinceDomesticUsed, [action.provinceId]: true },
-    };
-  }
+  // (Move/attack use activeMovements as the lock; build uses project slots)
 
   const newKingdoms = { ...newState.kingdoms };
   const newProvinces = { ...newState.provinces };
@@ -254,15 +260,20 @@ export function applyPlayerAction(
       k.food = Math.max(0, k.food - cost.food);
       newKingdoms[kid] = k;
 
-      const updatedProv = { ...p };
-      switch (action.buildingType) {
-        case 'farm':    updatedProv.hasFarm    = true; break;
-        case 'market':  updatedProv.hasMarket  = true; break;
-        case 'barracks': updatedProv.hasBarracks = true; break;
-        case 'fort':    updatedProv.fortLevel  = Math.min(3, p.fortLevel + 1); break;
-      }
-      newProvinces[action.provinceId!] = updatedProv;
-      message = `Built ${action.buildingType} in ${p.name}. Cost: ${cost.gold} gold.`;
+      // Start a timed project (Part A) — building completes in durationDays
+      const duration = PROJECT_DURATIONS[action.buildingType!] ?? 7;
+      const proj: Project = {
+        id:            `proj_${action.provinceId}_${action.buildingType}_${Math.floor(newState.gameTimeDays)}`,
+        kind:          action.buildingType!,
+        startedAtDays: newState.gameTimeDays,
+        durationDays:  duration,
+        costGold:      cost.gold,
+      };
+      newProvinces[action.provinceId!] = {
+        ...p,
+        activeProjects: [...(p.activeProjects ?? []), proj],
+      };
+      message = `${action.buildingType} construction started in ${p.name} — completes in ${duration} days.`;
       break;
     }
 
@@ -685,9 +696,7 @@ export function executeTurn(state: GameState): GameState {
       season: newSeason,
       year: newYear,
       phase: 'season_summary',
-      // Reset domestic slots for next season
-      provinceDomesticUsed: {},
-      armyCampaignUsed: {},
+      // (Domestic slot system replaced by Project Slots — no reset needed)
       pendingPlayerActions: [],
       fogOfWar: newFog,
       turnLog: cappedLog,

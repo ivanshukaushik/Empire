@@ -15,10 +15,11 @@ import {
   RecentBattle,
   LogEntry,
   DiploProposal,
+  LedgerEvent,
 } from './types';
 import { createRng, rollFloat } from './rng';
 import { resolveBattle, AttackOrder } from './combat';
-import { economyPhase } from './economy';
+import { economyPhase, provinceManpower } from './economy';
 import { diplomacyPhase, proposeNAP } from './diplomacy';
 import { checkWinConditions, markEliminated } from './winConditions';
 import { recomputeFog } from './initialState';
@@ -112,18 +113,37 @@ export function simulateTick(
         s = battleOut.newState;
         const r = battleOut.result;
         const flash: RecentBattle = {
-          id:                 `b_${armyId}_${Math.floor(newTimeDays)}`,
+          id:                      `b_${armyId}_${Math.floor(newTimeDays)}`,
+          provinceId:              mv.toProvinceId,
+          attackerKingdomId:       mv.attackerKingdomId,
+          defenderKingdomId:       targetProv.owner,
+          attackerWon:             r.attackerWon,
+          resolvedAtDays:          newTimeDays,
+          narrative:               r.narrative,
+          // Part D: store actual battle stats so SeasonSummary / WarLedger show real numbers
+          attackerPower:           r.attackerPower,
+          defenderPower:           r.defenderPower,
+          attackerLosses:          r.attackerLosses,
+          defenderLosses:          r.defenderLosses,
+          attackerInitialStrength: r.attackerInitialStrength,
+          defenderInitialStrength: r.defenderInitialStrength,
+        };
+        const ledgerEntry: LedgerEvent = {
+          id:                 `le_b_${armyId}_${Math.floor(newTimeDays)}`,
+          type:               'battle',
+          dayResolved:        newTimeDays,
+          season:             s.season,
+          message:            r.narrative,
           provinceId:         mv.toProvinceId,
           attackerKingdomId:  mv.attackerKingdomId,
           defenderKingdomId:  targetProv.owner,
           attackerWon:        r.attackerWon,
-          resolvedAtDays:     newTimeDays,
-          narrative:          r.narrative,
         };
         s = {
           ...s,
           recentBattles: [...s.recentBattles.slice(-(MAX_RECENT_BATTLES - 1)), flash],
-          turnLog: addLog(s.turnLog, s.season, 'combat', r.narrative),
+          turnLog:       addLog(s.turnLog, s.season, 'combat', r.narrative),
+          warLedger:     addLedgerEvent(s.warLedger, ledgerEntry),
         };
       } catch (err) {
         console.error('[simulateTick] resolveBattle threw:', err);
@@ -140,6 +160,59 @@ export function simulateTick(
     }
 
     s = removeMovement(s, armyId);
+  }
+
+  // ── Part B: Per-day manpower growth ─────────────────────────
+  {
+    const updatedKingdoms = { ...s.kingdoms };
+    for (const kid of Object.keys(updatedKingdoms)) {
+      const k = updatedKingdoms[kid];
+      if (k.isEliminated) continue;
+      const ownedProvs = Object.values(s.provinces).filter((p) => p.owner === kid);
+      const mpPerSeason = ownedProvs.reduce((sum, p) => sum + provinceManpower(p, k), 0);
+      const dailyGain = mpPerSeason * 0.2 / 90;
+      updatedKingdoms[kid] = { ...k, manpower: Math.min(100, k.manpower + dailyGain * dtDays) };
+    }
+    s = { ...s, kingdoms: updatedKingdoms };
+  }
+
+  // ── Part A: Project completion ───────────────────────────────
+  {
+    const updatedProvs = { ...s.provinces };
+    let anyDone = false;
+    for (const pid of Object.keys(updatedProvs)) {
+      const prov = updatedProvs[pid];
+      if (!prov.activeProjects || prov.activeProjects.length === 0) continue;
+      const done = prov.activeProjects.filter(
+        (proj) => proj.startedAtDays + proj.durationDays <= newTimeDays
+      );
+      if (done.length === 0) continue;
+      const remaining = prov.activeProjects.filter(
+        (proj) => proj.startedAtDays + proj.durationDays > newTimeDays
+      );
+      let updatedProv = { ...prov, activeProjects: remaining };
+      for (const proj of done) {
+        switch (proj.kind) {
+          case 'farm':     updatedProv = { ...updatedProv, hasFarm: true }; break;
+          case 'market':   updatedProv = { ...updatedProv, hasMarket: true }; break;
+          case 'barracks': updatedProv = { ...updatedProv, hasBarracks: true }; break;
+          case 'fort':     updatedProv = { ...updatedProv, fortLevel: Math.min(3, updatedProv.fortLevel + 1) }; break;
+        }
+        const msg = `${proj.kind} construction completed in ${prov.name}!`;
+        s = {
+          ...s,
+          turnLog:   addLog(s.turnLog, s.season, 'economy', msg),
+          warLedger: addLedgerEvent(s.warLedger, {
+            id: `le_proj_${pid}_${proj.kind}_${Math.floor(newTimeDays)}`,
+            type: 'economy', dayResolved: newTimeDays, season: s.season,
+            message: msg, provinceId: pid,
+          }),
+        };
+      }
+      updatedProvs[pid] = updatedProv;
+      anyDone = true;
+    }
+    if (anyDone) s = { ...s, provinces: updatedProvs };
   }
 
   // ── AI planning windows ─────────────────────────────────────
@@ -179,12 +252,7 @@ export function simulateTick(
       s = { ...s, lastEconomyAtDays: s.gameTimeDays };
     }
 
-    // Reset domestic slots each season
-    s = {
-      ...s,
-      provinceDomesticUsed: {},
-      armyCampaignUsed:   {},
-    };
+    // (Domestic slot system replaced by Project Slots — no reset needed)
 
     // Diplomacy tick (treaty expiry, tribute collection)
     const diploOut = diplomacyPhase(s);
@@ -229,55 +297,9 @@ export function simulateTick(
       fogOfWar: recomputeFog(s.playerKingdomId, s.provinces, s.fogOfWar, s.season),
     };
 
-    // Build season summary and show it (game auto-pauses)
-    if (!s.isGameOver) {
-      const seasonName = SEASON_NAMES[s.season % 4] ?? 'Unknown';
-      s = {
-        ...s,
-        phase: 'season_summary',
-        paused: true,
-        seasonSummary: {
-          season:          s.season,
-          year:            s.year,
-          seasonName,
-          battles:         s.recentBattles
-            .filter((b) => b.resolvedAtDays > prevTimeDays)
-            .map((b) => ({
-              // BattleResult shape (minimal — enough for SeasonSummary component)
-              attackerKingdomId:      b.attackerKingdomId,
-              defenderKingdomId:      b.defenderKingdomId,
-              attackerArmyId:         '',
-              targetProvinceId:       b.provinceId,
-              attackerInitialStrength: 0,
-              defenderInitialStrength: 0,
-              attackerPower:          0,
-              defenderPower:          0,
-              attackerWon:            b.attackerWon,
-              attackerLosses:         0,
-              defenderLosses:         0,
-              provinceCaptured:       b.attackerWon,
-              narrative:              b.narrative,
-            })),
-          playerActions:   [],
-          aiActions:       s.turnLog
-            .filter((e) => e.type === 'ai' && e.season === s.season)
-            .map((e) => e.message),
-          economyLines:    s.turnLog
-            .filter((e) => e.type === 'economy' && e.season === s.season)
-            .map((e) => e.message),
-          diplomaticLines: s.turnLog
-            .filter((e) => e.type === 'diplomacy' && e.season === s.season)
-            .map((e) => e.message),
-          espionageLines:  s.turnLog
-            .filter((e) => e.type === 'espionage' && e.season === s.season)
-            .map((e) => e.message),
-          successionLines: s.turnLog
-            .filter((e) => e.type === 'succession' && e.season === s.season)
-            .map((e) => e.message),
-          winCheck:        null,
-        },
-      };
-    }
+    // Part C: No season pause — game continues uninterrupted.
+    // Battle events are already added to warLedger when they resolve.
+    // SeasonSummary modal is replaced by the persistent War Ledger panel.
 
     // Cap log
     if (s.turnLog.length > MAX_LOG_ENTRIES) {
@@ -519,4 +541,13 @@ function addLog(
   message: string
 ): LogEntry[] {
   return [...log, { season, type, message }];
+}
+
+function addLedgerEvent(
+  ledger: LedgerEvent[] | undefined,
+  event: LedgerEvent
+): LedgerEvent[] {
+  const current = ledger ?? [];
+  // Keep last 100 entries
+  return [...current.slice(-99), event];
 }

@@ -5,6 +5,7 @@ import KingdomInfo from './KingdomInfo';
 import ProvinceInfo from './ProvinceInfo';
 import ActionBar from './ActionBar';
 import SeasonSummary from './SeasonSummary';
+import WarLedger from './WarLedger';
 
 const SEASON_NAMES = ['Winter', 'Spring', 'Summer', 'Autumn'];
 
@@ -82,6 +83,7 @@ export default function GameBoard() {
   useGameLoop();
 
   const [toasts, setToasts] = useState<Toast[]>([]);
+  const [showLedger, setShowLedger] = useState(false);
 
   const addToast = useCallback((message: string, type: Toast['type'] = 'info') => {
     const id = ++toastId;
@@ -187,8 +189,7 @@ export default function GameBoard() {
           const pid = gameState.selectedProvinceId;
           if (pid) {
             const p = gameState.provinces[pid];
-            const provDomesticUsed = !!(gameState.provinceDomesticUsed?.[pid]);
-            if (p?.owner === gameState.playerKingdomId && (p.hasBarracks || p.isCapital) && !provDomesticUsed) {
+            if (p?.owner === gameState.playerKingdomId && (p.hasBarracks || p.isCapital)) {
               queueAction({ type: 'recruit', apCost: 0, provinceId: pid, recruitAmount: 3 });
             }
           }
@@ -305,9 +306,22 @@ export default function GameBoard() {
         )}
 
         {/* Pause indicator */}
-        {gameState.paused && gameState.phase !== 'season_summary' && (
+        {gameState.paused && (
           <span className="text-yellow-400 font-medium">⏸ Paused</span>
         )}
+
+        {/* War Ledger toggle */}
+        <button
+          className={`text-xs px-2 py-0.5 rounded border transition-colors ${
+            showLedger
+              ? 'bg-amber-900/50 border-amber-700 text-amber-300'
+              : 'bg-gray-900 border-gray-700 text-gray-500 hover:text-gray-300'
+          }`}
+          onClick={() => setShowLedger((v) => !v)}
+          title="Toggle War Ledger (recent events)"
+        >
+          📜 Ledger {(gameState.warLedger?.length ?? 0) > 0 && <span className="text-[10px]">({gameState.warLedger!.length})</span>}
+        </button>
       </div>
 
       {/* Main content */}
@@ -358,9 +372,16 @@ export default function GameBoard() {
         </div>
 
         {/* Right panel */}
-        <div className="w-60 shrink-0 border-l border-gray-800 overflow-hidden">
-          <ProvinceInfo />
-        </div>
+        {!showLedger && (
+          <div className="w-60 shrink-0 border-l border-gray-800 overflow-hidden">
+            <ProvinceInfo />
+          </div>
+        )}
+        {showLedger && (
+          <div className="w-72 shrink-0 border-l border-gray-800 overflow-hidden relative">
+            <WarLedger onClose={() => setShowLedger(false)} />
+          </div>
+        )}
       </div>
 
       {/* Bottom action bar */}
