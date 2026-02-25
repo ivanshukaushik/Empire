@@ -179,10 +179,9 @@ export function simulateTick(
       s = { ...s, lastEconomyAtDays: s.gameTimeDays };
     }
 
-    // Reset orders & domestic slots
+    // Reset domestic slots each season
     s = {
       ...s,
-      ordersRemaining:    s.maxOrders,
       provinceDomesticUsed: {},
       armyCampaignUsed:   {},
     };
@@ -430,16 +429,9 @@ function applyAIAction(
       };
       break;
     }
-    case 'reform': {
-      if (!action.reform) break;
-      s = {
-        ...s,
-        kingdoms: { ...s.kingdoms, [kingdomId]: { ...k, activeReform: action.reform } },
-      };
-      break;
-    }
     case 'diplomacy_nap': {
-      if (!action.targetKingdomId) break;
+      // Never auto-sign with the player — they must accept via the inbox
+      if (!action.targetKingdomId || action.targetKingdomId === s.playerKingdomId) break;
       try {
         const result = proposeNAP(s, kingdomId, action.targetKingdomId, rng);
         if (result.accepted) s = result.newState;

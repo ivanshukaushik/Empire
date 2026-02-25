@@ -44,7 +44,7 @@ export default function ProvinceInfo() {
   const rel        = gameState.relations[gameState.playerKingdomId]?.[province.owner];
   const hasNAP     = rel?.treaty?.type === 'nap';
   const isPlanning = gameState.phase === 'player_planning';
-  const ap         = gameState.ordersRemaining;
+  const provDomesticUsed = !!(gameState.provinceDomesticUsed?.[pid]);
 
   const armiesHere      = Object.values(gameState.armies).filter((a) => a.provinceId === pid);
   const playerArmiesHere = armiesHere.filter((a) => a.kingdomId === gameState.playerKingdomId);
@@ -190,57 +190,60 @@ export default function ProvinceInfo() {
                 {/* Military */}
                 {playerArmiesHere.length > 0 && (
                   <ActionGroup label="Military">
-                    {playerArmiesHere.map((army) => (
-                      <div key={army.id} className="flex gap-1">
-                        <ActionBtn
-                          disabled={ap < 1}
-                          onClick={() => { setAction('move'); setPendingMoveArmy(army.id); }}
-                        >
-                          ⇒ Move army
-                        </ActionBtn>
-                        <ActionBtn
-                          danger
-                          disabled={ap < 1}
-                          onClick={() => { setAction('attack'); setPendingMoveArmy(army.id); }}
-                        >
-                          ⚔ Attack
-                        </ActionBtn>
-                      </div>
-                    ))}
+                    {playerArmiesHere.map((army) => {
+                      const isMarching = !!(gameState.activeMovements ?? {})[army.id];
+                      return (
+                        <div key={army.id} className="flex gap-1">
+                          <ActionBtn
+                            disabled={isMarching}
+                            onClick={() => { setAction('move'); setPendingMoveArmy(army.id); }}
+                          >
+                            {isMarching ? '→ Marching…' : '⇒ Move army'}
+                          </ActionBtn>
+                          <ActionBtn
+                            danger
+                            disabled={isMarching}
+                            onClick={() => { setAction('attack'); setPendingMoveArmy(army.id); }}
+                          >
+                            ⚔ Attack
+                          </ActionBtn>
+                        </div>
+                      );
+                    })}
                   </ActionGroup>
                 )}
 
                 {/* Build */}
-                <ActionGroup label="Build (1 AP each)">
+                <ActionGroup label={provDomesticUsed ? 'Build (slot used this season)' : 'Build'}>
                   <div className="grid grid-cols-2 gap-1">
-                    <ActionBtn disabled={ap < 1 || province.hasFarm}
-                      onClick={() => queueAction({ type: 'build', apCost: 1, provinceId: pid, buildingType: 'farm' })}>
+                    <ActionBtn disabled={provDomesticUsed || province.hasFarm}
+                      onClick={() => queueAction({ type: 'build', apCost: 0, provinceId: pid, buildingType: 'farm' })}>
                       {province.hasFarm ? <s className="text-gray-600">🌱 Farm</s> : '🌱 Farm'}
                     </ActionBtn>
-                    <ActionBtn disabled={ap < 1 || province.hasMarket}
-                      onClick={() => queueAction({ type: 'build', apCost: 1, provinceId: pid, buildingType: 'market' })}>
+                    <ActionBtn disabled={provDomesticUsed || province.hasMarket}
+                      onClick={() => queueAction({ type: 'build', apCost: 0, provinceId: pid, buildingType: 'market' })}>
                       {province.hasMarket ? <s className="text-gray-600">🏪 Market</s> : '🏪 Market'}
                     </ActionBtn>
-                    <ActionBtn disabled={ap < 1 || province.hasBarracks}
-                      onClick={() => queueAction({ type: 'build', apCost: 1, provinceId: pid, buildingType: 'barracks' })}>
+                    <ActionBtn disabled={provDomesticUsed || province.hasBarracks}
+                      onClick={() => queueAction({ type: 'build', apCost: 0, provinceId: pid, buildingType: 'barracks' })}>
                       {province.hasBarracks ? <s className="text-gray-600">🏛 Barracks</s> : '🏛 Barracks'}
                     </ActionBtn>
-                    <ActionBtn disabled={ap < 1 || province.fortLevel >= 3}
-                      onClick={() => queueAction({ type: 'build', apCost: 1, provinceId: pid, buildingType: 'fort' })}>
+                    <ActionBtn disabled={provDomesticUsed || province.fortLevel >= 3}
+                      onClick={() => queueAction({ type: 'build', apCost: 0, provinceId: pid, buildingType: 'fort' })}>
                       🏯 Fort {province.fortLevel}/3
                     </ActionBtn>
                   </div>
                 </ActionGroup>
 
                         {/* Levy */}
-                <ActionGroup label="Levy (1 Order)">
+                <ActionGroup label="Levy">
                   <LevyWidget provinceId={pid} province={province} season={gameState.season} />
                 </ActionGroup>
 
                 {/* Recruit */}
                 {(province.hasBarracks || province.isCapital) && (
-                  <ActionGroup label="Recruit">
-                    <RecruitWidget provinceId={pid} />
+                  <ActionGroup label={provDomesticUsed ? 'Recruit (slot used)' : 'Recruit'}>
+                    <RecruitWidget provinceId={pid} provDomesticUsed={provDomesticUsed} />
                   </ActionGroup>
                 )}
               </>
@@ -250,19 +253,19 @@ export default function ProvinceInfo() {
             {!isOwned && (
               <>
                 <ActionGroup label="Intelligence">
-                  <ActionBtn disabled={ap < 1}
-                    onClick={() => queueAction({ type: 'espionage_scout', apCost: 1, targetProvinceId: pid })}>
-                    🔍 Scout (1 AP)
+                  <ActionBtn disabled={false}
+                    onClick={() => queueAction({ type: 'espionage_scout', apCost: 0, targetProvinceId: pid })}>
+                    🔍 Scout
                   </ActionBtn>
                   {isVisible && (
                     <>
-                      <ActionBtn disabled={ap < 2}
-                        onClick={() => queueAction({ type: 'espionage_sabotage', apCost: 2, targetProvinceId: pid })}>
-                        🗡 Sabotage (2 AP)
+                      <ActionBtn disabled={false}
+                        onClick={() => queueAction({ type: 'espionage_sabotage', apCost: 0, targetProvinceId: pid })}>
+                        🗡 Sabotage
                       </ActionBtn>
-                      <ActionBtn disabled={ap < 2}
-                        onClick={() => queueAction({ type: 'espionage_incite', apCost: 2, targetProvinceId: pid })}>
-                        😠 Incite Unrest (2 AP)
+                      <ActionBtn disabled={false}
+                        onClick={() => queueAction({ type: 'espionage_incite', apCost: 0, targetProvinceId: pid })}>
+                        😠 Incite Unrest
                       </ActionBtn>
                     </>
                   )}
@@ -271,15 +274,14 @@ export default function ProvinceInfo() {
                 {!hasNAP && ownerK && (
                   <ActionGroup label="Diplomacy">
                     <ActionBtn
-                      disabled={ap < (playerK.id === 'qin' ? 2 : 1)}
+                      disabled={false}
                       onClick={() => queueAction({
                         type: 'diplomacy_nap',
-                        apCost: playerK.id === 'qin' ? 2 : 1,
+                        apCost: 0,
                         targetKingdomId: province.owner,
                       })}
                     >
                       ✋ Propose NAP with {ownerK.name}
-                      {playerK.id === 'qin' ? ' (2 AP)' : ' (1 AP)'}
                     </ActionBtn>
                   </ActionGroup>
                 )}
@@ -314,7 +316,8 @@ function EmptyState() {
           <div>I — Scout selected</div>
           <div>R — Recruit at selected</div>
           <div>Y/N — Accept/Decline inbox</div>
-          <div>S/↵ — End Season</div>
+          <div>Space — Pause/Resume</div>
+          <div>1-4 — Set speed</div>
         </div>
       </div>
     </div>
@@ -350,13 +353,12 @@ function LevyWidget({ provinceId, province, season }: { provinceId: string; prov
   const queueAction = useGameStore((s) => s.queueAction);
   const gameState   = useGameStore((s) => s.gameState!);
   const player      = gameState.kingdoms[gameState.playerKingdomId];
-  const ap          = gameState.ordersRemaining;
 
   const cooldownUntil = province.levyCooldownUntil ?? 0;
   const cooldownLeft  = Math.max(0, cooldownUntil - season);
   const onCooldown    = cooldownLeft > 0;
   const canAfford     = player.treasury >= LEVY_GOLD_COST;
-  const canLevy       = ap >= 1 && !onCooldown && canAfford;
+  const canLevy       = !onCooldown && canAfford;
 
   return (
     <div>
@@ -368,7 +370,7 @@ function LevyWidget({ provinceId, province, season }: { provinceId: string; prov
       ) : (
         <ActionBtn
           disabled={!canLevy}
-          onClick={() => queueAction({ type: 'levy', apCost: 1, provinceId, levyAmount: LEVY_AMOUNT })}
+          onClick={() => queueAction({ type: 'levy', apCost: 0, provinceId, levyAmount: LEVY_AMOUNT })}
         >
           👥 Call Levy ({LEVY_GOLD_COST}g, −{LEVY_STABILITY_HIT} stability)
         </ActionBtn>
@@ -376,19 +378,15 @@ function LevyWidget({ provinceId, province, season }: { provinceId: string; prov
       {!canAfford && !onCooldown && (
         <div className="text-red-500 text-[10px] mt-0.5">Not enough gold ({Math.floor(player.treasury)} available)</div>
       )}
-      {ap < 1 && !onCooldown && (
-        <div className="text-red-500 text-[10px] mt-0.5">No Orders remaining</div>
-      )}
     </div>
   );
 }
 
-function RecruitWidget({ provinceId }: { provinceId: string }) {
+function RecruitWidget({ provinceId, provDomesticUsed }: { provinceId: string; provDomesticUsed: boolean }) {
   const [amount, setAmount] = useState(3);
   const queueAction = useGameStore((s) => s.queueAction);
   const gameState   = useGameStore((s) => s.gameState!);
   const player      = gameState.kingdoms[gameState.playerKingdomId];
-  const ap          = gameState.ordersRemaining;
   const troops      = amount * 10;
   const goldCost    = Math.ceil(amount * 2 * player.recruitCostModifier);
 
@@ -406,10 +404,10 @@ function RecruitWidget({ provinceId }: { provinceId: string }) {
         </select>
       </div>
       <ActionBtn
-        disabled={ap < 1 || player.manpower < amount || player.treasury < goldCost}
-        onClick={() => queueAction({ type: 'recruit', apCost: 1, provinceId, recruitAmount: amount })}
+        disabled={provDomesticUsed || player.manpower < amount || player.treasury < goldCost}
+        onClick={() => queueAction({ type: 'recruit', apCost: 0, provinceId, recruitAmount: amount })}
       >
-        Recruit {troops} troops — {goldCost}g, {amount}mp (1 AP)
+        Recruit {troops} troops — {goldCost}g, {amount}mp
       </ActionBtn>
       {player.manpower < amount && (
         <div className="text-red-500 text-[10px] mt-0.5">Not enough manpower ({Math.floor(player.manpower)} available)</div>

@@ -100,7 +100,10 @@ export default function GameBoard() {
     function onKey(e: KeyboardEvent) {
       if (['INPUT', 'SELECT', 'TEXTAREA'].includes((e.target as HTMLElement).tagName)) return;
 
-      const hasOrders = gameState.ordersRemaining > 0;
+      // Ready armies (not marching)
+      const readyArmies = Object.values(gameState.armies).filter(
+        (a) => a.kingdomId === gameState.playerKingdomId && a.size > 0 && !(gameState.activeMovements ?? {})[a.id]
+      );
 
       switch (e.key) {
         // ── Pause / resume — Space ─────────────────────────────
@@ -124,11 +127,26 @@ export default function GameBoard() {
         // ── Military ──────────────────────────────────────────
         case 'a':
         case 'A':
-          if (isPlanning && hasOrders) { setAction('attack'); setPendingMoveArmy(null); }
+          if (isPlanning) {
+            setAction('attack');
+            // Auto-select if only one ready army
+            if (readyArmies.length === 1) {
+              setPendingMoveArmy(readyArmies[0].id);
+            } else {
+              setPendingMoveArmy(null);
+            }
+          }
           break;
         case 'm':
         case 'M':
-          if (isPlanning && hasOrders) { setAction('move'); setPendingMoveArmy(null); }
+          if (isPlanning) {
+            setAction('move');
+            if (readyArmies.length === 1) {
+              setPendingMoveArmy(readyArmies[0].id);
+            } else {
+              setPendingMoveArmy(null);
+            }
+          }
           break;
 
         // ── Split army ────────────────────────────────────────
@@ -151,12 +169,12 @@ export default function GameBoard() {
         // ── Intel / scout ──────────────────────────────────────
         case 'i':
         case 'I': {
-          if (!isPlanning || !hasOrders) break;
+          if (!isPlanning) break;
           const pid = gameState.selectedProvinceId;
           if (pid) {
             const p = gameState.provinces[pid];
             if (p && p.owner !== gameState.playerKingdomId) {
-              queueAction({ type: 'espionage_scout', apCost: 1, targetProvinceId: pid });
+              queueAction({ type: 'espionage_scout', apCost: 0, targetProvinceId: pid });
             }
           }
           break;
@@ -169,7 +187,8 @@ export default function GameBoard() {
           const pid = gameState.selectedProvinceId;
           if (pid) {
             const p = gameState.provinces[pid];
-            if (p?.owner === gameState.playerKingdomId && (p.hasBarracks || p.isCapital)) {
+            const provDomesticUsed = !!(gameState.provinceDomesticUsed?.[pid]);
+            if (p?.owner === gameState.playerKingdomId && (p.hasBarracks || p.isCapital) && !provDomesticUsed) {
               queueAction({ type: 'recruit', apCost: 0, provinceId: pid, recruitAmount: 3 });
             }
           }
@@ -201,9 +220,6 @@ export default function GameBoard() {
     isPlanning, gameState, setAction, setPendingMoveArmy, queueAction,
     firstProposal, acceptProposal, declineProposal, addToast, togglePause, setSpeed,
   ]);
-
-  const orders    = gameState.ordersRemaining;
-  const maxOrders = gameState.maxOrders;
 
   const recentEvents = gameState.turnLog
     .filter((e) => e.type !== 'economy')
@@ -264,24 +280,6 @@ export default function GameBoard() {
 
         <div className="flex-1" />
 
-        {/* Orders pips */}
-        <div className="flex gap-1 items-center" title={`${orders}/${maxOrders} Orders remaining. Refreshes each season. Campaign actions each cost 1. Domestic actions (Build/Recruit) are free.`}>
-          {Array.from({ length: maxOrders }).map((_, i) => (
-            <div
-              key={i}
-              className={`w-3.5 h-3.5 rounded border-2 ${
-                i < orders
-                  ? 'bg-amber-500 border-amber-400'
-                  : 'bg-gray-800 border-gray-700'
-              }`}
-            />
-          ))}
-          <span className="text-gray-400 ml-1 font-medium">
-            {orders}/{maxOrders} Orders
-          </span>
-        </div>
-
-        <span className="text-gray-700">·</span>
         <span className="text-gray-400">
           {seasonName}, {gameState.year} BCE
           <span className="text-gray-600 ml-1">
@@ -410,15 +408,15 @@ function HelpOverlay({ onDismiss }: { onDismiss: () => void }) {
         <h2 className="text-xl font-bold gold mb-1">How to Play</h2>
         <p className="text-xs text-gray-500 mb-4">Ancient Warring States — 475 BCE — Real-time simulation</p>
         <div className="space-y-3 text-sm text-gray-300">
-          <HelpRow icon="⏸" label="Time controls" desc="Press Space to pause/resume. Keys 1/2/3/4 set speed (1×/2×/4×/8× — game-days per second). Use the bottom bar buttons too." />
-          <HelpRow icon="📋" label="Orders" desc="2 Orders per season, refreshing automatically each season. Campaign actions (Attack, Move, Espionage, Diplomacy, Reform, Levy) cost 1 Order. Build and Recruit are free domestic actions (once per province per season)." />
-          <HelpRow icon="⚔" label="Attack (A)" desc="Press A, click your army's province, then click an enemy province. Your army will march and battle on arrival. Watch the army dot animate across the map!" />
-          <HelpRow icon="⇒" label="Move (M)" desc="Press M, click your army's province, then click a friendly adjacent province. Movement takes 3–8 game-days depending on terrain." />
-          <HelpRow icon="✂" label="Split Army (X)" desc="Split selected army 50/50 — useful for multi-front operations." />
-          <HelpRow icon="👥" label="Levy (L)" desc="Emergency manpower from a province. Costs gold and stability, 4-season cooldown." />
-          <HelpRow icon="🏗" label="Build & Recruit (R)" desc="Select your province. Free — no Orders needed." />
-          <HelpRow icon="✉" label="Diplomacy inbox (Y/N)" desc="AI kingdoms send proposals. Press Y to accept the first one, N to decline." />
-          <HelpRow icon="👑" label="Rulers" desc="Each kingdom has a ruler with military/diplomacy/admin stats. Rulers age and die — successors change strategy." />
+          <HelpRow icon="⏸" label="Time controls" desc="Press Space to pause/resume. Keys 1/2/3/4 set speed (1×/2×/4×/8× game-days per second). Use bottom bar buttons too." />
+          <HelpRow icon="⚔" label="Attack (A)" desc="Press A (or click ⚔ Attack) — click an enemy province to attack. If only one army exists it's auto-selected. Watch it march on the map!" />
+          <HelpRow icon="⇒" label="Move (M)" desc="Press M — click a friendly adjacent province. Movement takes 3–8 game-days by terrain (plains fastest, mountains slowest)." />
+          <HelpRow icon="✂" label="Split Army (X)" desc="Split selected army 50/50. Useful for multi-front defense." />
+          <HelpRow icon="👥" label="Levy (L)" desc="Emergency manpower levy: costs gold and stability, 4-season cooldown. No other limits." />
+          <HelpRow icon="🏗" label="Build & Recruit (R)" desc="Each province may build/recruit once per season (domestic slot). No Orders needed." />
+          <HelpRow icon="🔍" label="Espionage (I)" desc="Scout, sabotage, or incite unrest in enemy provinces. Select the province then press I or use the Intel buttons." />
+          <HelpRow icon="✉" label="Diplomacy inbox (Y/N)" desc="AI kingdoms send NAP proposals. Press Y to accept, N to decline. You always choose — nothing is auto-signed." />
+          <HelpRow icon="👑" label="Rulers" desc="Each kingdom has a ruler with military/diplomacy/admin stats. Rulers age and die — successors shift strategy." />
           <div className="border-t border-gray-800 pt-3 text-gray-500 text-xs">
             <strong className="text-gray-400">Win:</strong> Control 60% of provinces or capture 3 enemy capitals. &nbsp;
             <strong className="text-gray-400">Lose:</strong> Your capital is captured or stability hits 0.

@@ -55,7 +55,6 @@ export type ActionType =
   | 'espionage_scout'
   | 'espionage_sabotage'
   | 'espionage_incite'
-  | 'reform'
   | 'levy'
   | 'split_army'
   | 'breach_treaty';

@@ -3,7 +3,7 @@ import { useGameStore } from '../store/gameStore';
 import { Province, FogOfWarEntry, ArmyMovement } from '../engine/types';
 import { previewCombat, OddsRating } from '../engine/combatPreview';
 import { MAP_FEATURES } from '../data/mapFeatures';
-import { BATTLE_FLASH_DURATION_DAYS } from '../engine/simulateTick';
+import { BATTLE_FLASH_DURATION_DAYS, computeTravelDays } from '../engine/simulateTick';
 
 const R = 18; // province node radius
 const MAP_W = 820;
@@ -579,6 +579,7 @@ export default function MapView({ className = '' }: Props) {
           gameState={gameState}
           combatPreview={combatPreview}
           isAttackMode={actionBeingPlanned === 'attack' && !!pendingMoveArmyId}
+          isMoveMode={actionBeingPlanned === 'move' && !!pendingMoveArmyId}
           isValidTarget={validTargetIds.has(hoveredId)}
         />
       )}
@@ -607,7 +608,7 @@ export default function MapView({ className = '' }: Props) {
 
 // ── Province hover tooltip ─────────────────────────────────
 function ProvinceHoverTooltip({
-  provinceId, mousePos, gameState, combatPreview, isAttackMode, isValidTarget,
+  provinceId, mousePos, gameState, combatPreview, isAttackMode, isMoveMode, isValidTarget,
 }: {
   provinceId: string;
   mousePos: { x: number; y: number };
@@ -615,6 +616,7 @@ function ProvinceHoverTooltip({
   gameState: any;
   combatPreview: ReturnType<typeof previewCombat>;
   isAttackMode: boolean;
+  isMoveMode: boolean;
   isValidTarget: boolean;
 }) {
   const p = gameState.provinces[provinceId];
@@ -708,6 +710,14 @@ function ProvinceHoverTooltip({
               <div className="text-yellow-600 text-[10px]">{combatPreview.terrainNote}</div>
             )}
             <div className="text-amber-800 text-[10px] italic">Click to commit to battle</div>
+          </div>
+        )}
+
+        {/* Travel ETA for valid move/attack targets */}
+        {isValidTarget && (isAttackMode || isMoveMode) && (
+          <div className="border-t border-amber-900/50 pt-1.5 text-amber-700 text-[10px]">
+            Travel time: <span className="text-amber-400 font-medium">{computeTravelDays(p.terrain, gameState.season)} days</span>
+            <span className="ml-1 capitalize">({p.terrain})</span>
           </div>
         )}
 

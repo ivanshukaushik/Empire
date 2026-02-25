@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useGameStore } from '../store/gameStore';
 import { SEASON_NAMES } from '../engine/turnEngine';
-import { provinceIncome, provinceFood } from '../engine/economy';
+import { provinceIncome, provinceFood, provinceManpower } from '../engine/economy';
 import { StatTooltip } from './Tooltip';
 import { BREACH_CONSEQUENCES } from '../engine/diplomacy';
 import type { Ruler } from '../engine/types';
@@ -32,6 +32,7 @@ export default function KingdomInfo() {
 
   const forecastGold = ownedProvs.reduce((s, p) => s + provinceIncome(p, player), 0);
   const forecastFood = ownedProvs.reduce((s, p) => s + provinceFood(p, player, gameState.season), 0);
+  const forecastManpower = Math.floor(ownedProvs.reduce((s, p) => s + provinceManpower(p, player), 0) * 0.2);
   const upkeepGold   = myArmies.reduce((s, a) => s + (a.size / 1000) * 0.4 * player.armyCostModifier, 0);
   const upkeepFood   = myArmies.reduce((s, a) => s + (a.size / 1000) * 0.8, 0);
   const netGold      = forecastGold - upkeepGold - (player.activeReform === 'propaganda' ? 5 : 0);
@@ -102,6 +103,7 @@ export default function KingdomInfo() {
             forecastFood={forecastFood}
             upkeepGold={upkeepGold}
             upkeepFood={upkeepFood}
+            forecastManpower={forecastManpower}
           />
         )}
         {tab === 'military' && (
@@ -166,35 +168,9 @@ export default function KingdomInfo() {
 }
 
 // ── Overview Tab ──────────────────────────────────────────────
-function OverviewTab({ player, gameState, ownedProvs, totalProvs, winTarget, progress, netGold, netFood, forecastGold, forecastFood, upkeepGold, upkeepFood }: any) {
-  const orders    = gameState.ordersRemaining as number;
-  const maxOrders = gameState.maxOrders as number;
-
+function OverviewTab({ player, gameState, ownedProvs, totalProvs, winTarget, progress, netGold, netFood, forecastGold, forecastFood, upkeepGold, upkeepFood, forecastManpower }: any) {
   return (
     <>
-      {/* Orders indicator */}
-      <div className="bg-gray-900 rounded-lg p-2.5 border border-gray-800">
-        <div className="flex items-center justify-between mb-1.5">
-          <StatTooltip tip="Orders are your campaign capacity. Move, Attack, Espionage, Diplomacy, Reform, and Levy each cost 1 Order. Build and Recruit are free domestic actions.">
-            <span className="text-gray-400 font-semibold cursor-help">Orders this season</span>
-          </StatTooltip>
-          <span className={`font-bold text-sm ${orders > 0 ? 'text-amber-400' : 'text-gray-600'}`}>
-            {orders}/{maxOrders}
-          </span>
-        </div>
-        <div className="flex gap-1">
-          {Array.from({ length: maxOrders }).map((_, i) => (
-            <div
-              key={i}
-              className={`flex-1 h-2 rounded ${i < orders ? 'bg-amber-500' : 'bg-gray-800'}`}
-            />
-          ))}
-        </div>
-        {orders === 0 && (
-          <div className="text-gray-600 text-[10px] mt-1 italic">End season (S) to refresh orders</div>
-        )}
-      </div>
-
       {/* Ruler card */}
       {player.ruler && <RulerCard ruler={player.ruler} />}
 
@@ -211,9 +187,9 @@ function OverviewTab({ player, gameState, ownedProvs, totalProvs, winTarget, pro
           tip="Feeds armies. Shortage → morale drops and troops die."
         />
         <ResourceRow
-          icon="⚔" label="Manpower" value={Math.floor(player.manpower)}
+          icon="⚔" label="Manpower" value={`${Math.floor(player.manpower)} (+${forecastManpower}/s)`}
           color="text-blue-400"
-          tip="Pool for recruiting. Auto-replenishes from provinces. Levy adds instantly."
+          tip="Pool for recruiting. Auto-replenishes from provinces each season. Levy adds instantly."
         />
         <ResourceRow
           icon="⚖" label="Stability" value={player.stability}

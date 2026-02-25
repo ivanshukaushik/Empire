@@ -38,15 +38,13 @@ const MAX_TURN_LOG_ENTRIES = 200;
 // ============================================================
 
 /**
- * Campaign actions cost 1 Order each.
- * Move and Attack additionally consume the army's campaign slot for the season.
+ * Campaign actions (legacy — kept for compatibility but no longer cost orders).
  */
 const CAMPAIGN_ACTIONS = new Set<ActionType>([
   'move', 'attack',
   'diplomacy_nap', 'diplomacy_tribute',
   'espionage_scout', 'espionage_sabotage', 'espionage_incite',
-  'reform',
-  'levy', // levy is a campaign action that also uses province domestic slot
+  'levy',
 ]);
 
 /**
@@ -79,15 +77,6 @@ export function validateAction(
 ): { valid: boolean; reason: string } {
   const kid = state.playerKingdomId;
   const kingdom = state.kingdoms[kid];
-  const orderCost = adjustedOrderCost(action, kid);
-
-  // ── Orders check (campaign actions only) ─────────────────
-  if (isCampaignAction(action.type)) {
-    if (state.ordersRemaining < orderCost) {
-      const extra = orderCost > 1 ? ` (Qin diplomacy costs ${orderCost})` : '';
-      return { valid: false, reason: `No Orders remaining this season${extra}. End Season to refresh.` };
-    }
-  }
 
   // ── Domestic slot check (build/recruit) ───────────────────
   if (DOMESTIC_ACTIONS.has(action.type)) {
@@ -192,10 +181,6 @@ export function validateAction(
       if (p.owner === kid) return { valid: false, reason: 'Cannot target your own province.' };
       return { valid: true, reason: '' };
     }
-    case 'reform': {
-      if (!action.reform) return { valid: false, reason: 'No reform selected.' };
-      return { valid: true, reason: '' };
-    }
     case 'levy': {
       if (!action.provinceId) return { valid: false, reason: 'No province selected.' };
       const p = state.provinces[action.provinceId];
@@ -240,12 +225,8 @@ export function applyPlayerAction(
   rng: () => number
 ): { newState: GameState; message: string; battleResult?: BattleResult } {
   const kid = state.playerKingdomId;
-  const orderCost = adjustedOrderCost(action, kid);
 
-  // Deduct orders for campaign actions
-  let newState: GameState = isCampaignAction(action.type)
-    ? { ...state, ordersRemaining: state.ordersRemaining - orderCost }
-    : { ...state };
+  let newState: GameState = { ...state };
 
   // (Move/attack no longer mark armyCampaignUsed — activeMovements is the lock)
 
@@ -401,17 +382,6 @@ export function applyPlayerAction(
     case 'espionage_incite': {
       const result = resolveEspionage(action, { ...newState, provinces: newProvinces, kingdoms: newKingdoms }, rng);
       return { newState: result.newState, message: result.message };
-    }
-
-    case 'reform': {
-      const k = { ...newKingdoms[kid] };
-      k.activeReform = action.reform ?? null;
-      if (action.reform === 'conscription') {
-        k.stability = Math.max(0, k.stability - 10);
-      }
-      newKingdoms[kid] = k;
-      message = `Reform enacted: ${action.reform?.replace(/_/g, ' ')}.`;
-      break;
     }
 
     case 'levy': {
@@ -613,20 +583,14 @@ export function executeTurn(state: GameState): GameState {
           break;
         }
         case 'diplomacy_nap': {
-          if (action.targetKingdomId) {
+          // Never auto-sign with the player — proposals go through the inbox
+          if (action.targetKingdomId && action.targetKingdomId !== s.playerKingdomId) {
             const result = proposeNAP(s, aiK.id, action.targetKingdomId, rng);
             if (result.accepted) {
               s = result.newState;
               summary.diplomaticLines.push(`${aiK.name} signs a Non-Aggression Pact with ${s.kingdoms[action.targetKingdomId]?.name}.`);
               summary.aiActions.push(`${aiK.name} proposed and signed a NAP with ${s.kingdoms[action.targetKingdomId]?.name}.`);
             }
-          }
-          break;
-        }
-        case 'reform': {
-          if (action.reform) {
-            const k = { ...s.kingdoms[aiK.id], activeReform: action.reform };
-            s = { ...s, kingdoms: { ...s.kingdoms, [aiK.id]: k } };
           }
           break;
         }
@@ -721,8 +685,7 @@ export function executeTurn(state: GameState): GameState {
       season: newSeason,
       year: newYear,
       phase: 'season_summary',
-      // Reset Orders, domestic slots, and army campaign slots for next season
-      ordersRemaining: s.maxOrders,
+      // Reset domestic slots for next season
       provinceDomesticUsed: {},
       armyCampaignUsed: {},
       pendingPlayerActions: [],
