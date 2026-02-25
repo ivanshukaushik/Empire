@@ -3,6 +3,10 @@ import { useGameStore } from '../store/gameStore';
 import { Province } from '../engine/types';
 import { StatTooltip } from './Tooltip';
 
+const LEVY_AMOUNT = 20;
+const LEVY_GOLD_COST = 5;
+const LEVY_STABILITY_HIT = 3;
+
 export default function ProvinceInfo() {
   const gameState          = useGameStore((s) => s.gameState!);
   const setSelected        = useGameStore((s) => s.setSelectedProvince);
@@ -228,6 +232,11 @@ export default function ProvinceInfo() {
                   </div>
                 </ActionGroup>
 
+                        {/* Levy */}
+                <ActionGroup label="Levy (1 Order)">
+                  <LevyWidget provinceId={pid} province={province} season={gameState.season} />
+                </ActionGroup>
+
                 {/* Recruit */}
                 {(province.hasBarracks || province.isCapital) && (
                   <ActionGroup label="Recruit">
@@ -301,9 +310,11 @@ function EmptyState() {
         <div className="text-[10px] mt-2 space-y-0.5">
           <div>A — Attack mode</div>
           <div>M — Move mode</div>
-          <div>S — Scout selected</div>
+          <div>X — Split army</div>
+          <div>I — Scout selected</div>
           <div>R — Recruit at selected</div>
-          <div>↵ — End Season</div>
+          <div>Y/N — Accept/Decline inbox</div>
+          <div>S/↵ — End Season</div>
         </div>
       </div>
     </div>
@@ -332,6 +343,43 @@ function ActionBtn({
     >
       {children}
     </button>
+  );
+}
+
+function LevyWidget({ provinceId, province, season }: { provinceId: string; province: Province; season: number }) {
+  const queueAction = useGameStore((s) => s.queueAction);
+  const gameState   = useGameStore((s) => s.gameState!);
+  const player      = gameState.kingdoms[gameState.playerKingdomId];
+  const ap          = gameState.ordersRemaining;
+
+  const cooldownUntil = province.levyCooldownUntil ?? 0;
+  const cooldownLeft  = Math.max(0, cooldownUntil - season);
+  const onCooldown    = cooldownLeft > 0;
+  const canAfford     = player.treasury >= LEVY_GOLD_COST;
+  const canLevy       = ap >= 1 && !onCooldown && canAfford;
+
+  return (
+    <div>
+      <div className="text-[10px] text-gray-600 mb-1">
+        +{LEVY_AMOUNT} manpower · costs {LEVY_GOLD_COST}g · stability −{LEVY_STABILITY_HIT} · 4-season cooldown
+      </div>
+      {onCooldown ? (
+        <div className="text-yellow-600 text-[10px]">⏳ Cooldown: {cooldownLeft} season{cooldownLeft !== 1 ? 's' : ''} remaining</div>
+      ) : (
+        <ActionBtn
+          disabled={!canLevy}
+          onClick={() => queueAction({ type: 'levy', apCost: 1, provinceId, levyAmount: LEVY_AMOUNT })}
+        >
+          👥 Call Levy ({LEVY_GOLD_COST}g, −{LEVY_STABILITY_HIT} stability)
+        </ActionBtn>
+      )}
+      {!canAfford && !onCooldown && (
+        <div className="text-red-500 text-[10px] mt-0.5">Not enough gold ({Math.floor(player.treasury)} available)</div>
+      )}
+      {ap < 1 && !onCooldown && (
+        <div className="text-red-500 text-[10px] mt-0.5">No Orders remaining</div>
+      )}
+    </div>
   );
 }
 

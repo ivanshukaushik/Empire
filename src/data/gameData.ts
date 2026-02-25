@@ -166,7 +166,7 @@ const zhongPersonality: AIPersonality = {
   scoutedProvinces: {},
 };
 
-export type KingdomDef = Omit<Kingdom, 'isPlayer'>;
+export type KingdomDef = Omit<Kingdom, 'isPlayer' | 'ruler'>;
 
 export const KINGDOM_DEFS: KingdomDef[] = [
   {
@@ -193,6 +193,7 @@ export const KINGDOM_DEFS: KingdomDef[] = [
     bonusDescription: 'Army upkeep −25%; reforms have no stability penalty',
     weaknessDescription: 'Diplomacy costs +1 AP; all kingdoms start −20 relations',
     archetype: 'The Legalists',
+    treatyBreachCount: 0,
   },
   {
     id: 'zhao',
@@ -218,6 +219,7 @@ export const KINGDOM_DEFS: KingdomDef[] = [
     bonusDescription: 'Army movement +1 range; +15% attack on plains',
     weaknessDescription: 'Food production −20%',
     archetype: 'The Cavalry Lords',
+    treatyBreachCount: 0,
   },
   {
     id: 'yan',
@@ -243,6 +245,7 @@ export const KINGDOM_DEFS: KingdomDef[] = [
     bonusDescription: 'Espionage cost −50%; free scout actions',
     weaknessDescription: 'Army combat −15%; income −15%',
     archetype: 'The Spymasters',
+    treatyBreachCount: 0,
   },
   {
     id: 'qi',
@@ -268,6 +271,7 @@ export const KINGDOM_DEFS: KingdomDef[] = [
     bonusDescription: 'Income +30%; can recruit without barracks (at higher cost)',
     weaknessDescription: 'Manpower base −20%',
     archetype: 'The Merchants',
+    treatyBreachCount: 0,
   },
   {
     id: 'wei',
@@ -293,6 +297,7 @@ export const KINGDOM_DEFS: KingdomDef[] = [
     bonusDescription: 'Combat +20% on plains; fort upgrades −20%',
     weaknessDescription: 'Surrounded — starts with borders on 6+ kingdoms',
     archetype: 'The Iron Crossbowmen',
+    treatyBreachCount: 0,
   },
   {
     id: 'han',
@@ -318,6 +323,7 @@ export const KINGDOM_DEFS: KingdomDef[] = [
     bonusDescription: 'All builds −10% gold; fort builds −30%',
     weaknessDescription: 'Manpower rate −20%; smaller pool',
     archetype: 'The Artisans',
+    treatyBreachCount: 0,
   },
   {
     id: 'chu',
@@ -343,6 +349,7 @@ export const KINGDOM_DEFS: KingdomDef[] = [
     bonusDescription: 'Food +30%; riverlands armies regenerate morale +5/season',
     weaknessDescription: 'Movement −1 in non-riverlands; heavier winter penalties',
     archetype: 'The River Lords',
+    treatyBreachCount: 0,
   },
   {
     id: 'zhongshan',
@@ -368,6 +375,7 @@ export const KINGDOM_DEFS: KingdomDef[] = [
     bonusDescription: 'Unrest recovers 2× faster; high starting stability',
     weaknessDescription: 'Small starting territory; lower income and manpower',
     archetype: 'The Survivors',
+    treatyBreachCount: 0,
   },
 ];
 

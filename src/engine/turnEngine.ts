@@ -8,6 +8,7 @@ import {
   Province,
   ActionType,
   DiploProposal,
+  RulerSuccessionEvent,
 } from './types';
 import { createRng, rollFloat } from './rng';
 import { resolveBattle, AttackOrder } from './combat';
@@ -17,6 +18,7 @@ import { resolveEspionage } from './espionage';
 import { checkWinConditions, markEliminated } from './winConditions';
 import { recomputeFog } from './initialState';
 import { aiPlanTurn } from '../ai/aiAgent';
+import { processRulerAging, generateRuler } from './ruler';
 
 // ============================================================
 // PERFORMANCE GUARDS
@@ -42,6 +44,7 @@ const CAMPAIGN_ACTIONS = new Set<ActionType>([
   'diplomacy_nap', 'diplomacy_tribute',
   'espionage_scout', 'espionage_sabotage', 'espionage_incite',
   'reform',
+  'levy', // levy is a campaign action that also uses province domestic slot
 ]);
 
 /**
@@ -191,6 +194,36 @@ export function validateAction(
       if (!action.reform) return { valid: false, reason: 'No reform selected.' };
       return { valid: true, reason: '' };
     }
+    case 'levy': {
+      if (!action.provinceId) return { valid: false, reason: 'No province selected.' };
+      const p = state.provinces[action.provinceId];
+      if (!p || p.owner !== kid) return { valid: false, reason: 'You do not own that province.' };
+      // Check levy cooldown
+      if (p.levyCooldownUntil && state.season < p.levyCooldownUntil) {
+        return { valid: false, reason: `Levy on cooldown for ${p.levyCooldownUntil - state.season} more season(s).` };
+      }
+      const levyAmt = action.levyAmount ?? 5;
+      const levyGoldCost = levyAmt * 3;
+      if (kingdom.treasury < levyGoldCost) {
+        return { valid: false, reason: `Levy requires ${levyGoldCost} gold (have ${Math.floor(kingdom.treasury)}).` };
+      }
+      return { valid: true, reason: '' };
+    }
+    case 'split_army': {
+      if (!action.armyId) return { valid: false, reason: 'No army selected.' };
+      const army = state.armies[action.armyId];
+      if (!army || army.kingdomId !== kid) return { valid: false, reason: 'Not your army.' };
+      if (army.size < 2000) return { valid: false, reason: 'Army too small to split (need 2000+).' };
+      return { valid: true, reason: '' };
+    }
+    case 'breach_treaty': {
+      if (!action.targetKingdomId) return { valid: false, reason: 'No target kingdom.' };
+      const rel = state.relations[kid]?.[action.targetKingdomId];
+      if (!rel?.treaty || rel.treaty.status !== 'active') {
+        return { valid: false, reason: 'No active treaty with that kingdom.' };
+      }
+      return { valid: true, reason: '' };
+    }
     default:
       return { valid: false, reason: 'Unknown action.' };
   }
@@ -220,8 +253,8 @@ export function applyPlayerAction(
     };
   }
 
-  // Mark province domestic slot used
-  if (DOMESTIC_ACTIONS.has(action.type) && action.provinceId) {
+  // Mark province domestic slot used (build/recruit/levy)
+  if ((DOMESTIC_ACTIONS.has(action.type) || action.type === 'levy') && action.provinceId) {
     newState = {
       ...newState,
       provinceDomesticUsed: { ...newState.provinceDomesticUsed, [action.provinceId]: true },
@@ -356,6 +389,60 @@ export function applyPlayerAction(
       break;
     }
 
+    case 'levy': {
+      const p = newProvinces[action.provinceId!];
+      const k = { ...newKingdoms[kid] };
+      const levyAmt = action.levyAmount ?? 5;
+      const levyGoldCost = levyAmt * 3;
+      // Pay gold cost
+      k.treasury -= levyGoldCost;
+      // Stability hit
+      k.stability = Math.max(0, k.stability - 3);
+      // Add manpower directly to pool
+      k.manpower = Math.min(100, k.manpower + levyAmt);
+      newKingdoms[kid] = k;
+      // Set levy cooldown on province
+      newProvinces[action.provinceId!] = {
+        ...p,
+        levyCooldownUntil: newState.season + 4,
+        unrest: Math.min(100, p.unrest + 8), // locals unhappy
+      };
+      message = `Levy raised from ${p.name}: +${levyAmt} manpower. Cost: ${levyGoldCost} gold, stability −3, unrest +8.`;
+      break;
+    }
+
+    case 'split_army': {
+      const army = newArmies[action.armyId!];
+      const fraction = action.splitFraction ?? 0.5;
+      const splitSize = Math.floor(army.size * fraction);
+      const remainSize = army.size - splitSize;
+      if (splitSize < 500 || remainSize < 500) {
+        message = 'Cannot split: resulting armies too small (min 500 each).';
+        break;
+      }
+      // Update original army
+      newArmies[action.armyId!] = { ...army, size: remainSize };
+      // Create new split army
+      const splitId = `a_${kid}_split_${Date.now()}`;
+      newArmies[splitId] = {
+        id: splitId,
+        kingdomId: kid,
+        provinceId: army.provinceId,
+        size: splitSize,
+        morale: army.morale,
+        name: `${army.name} (detachment)`,
+        maxSize: splitSize,
+      };
+      message = `Split ${army.name}: ${remainSize.toLocaleString()} + ${splitSize.toLocaleString()} detachment in ${newProvinces[army.provinceId]?.name ?? army.provinceId}.`;
+      break;
+    }
+
+    case 'breach_treaty': {
+      // Breach is handled through the store directly; if it somehow arrives here, ignore
+      message = 'Use the diplomacy panel to breach treaties.';
+      break;
+    }
+
     default:
       message = 'Unknown action.';
   }
@@ -388,6 +475,7 @@ export function executeTurn(state: GameState): GameState {
     economyLines: [],
     diplomaticLines: [],
     espionageLines: [],
+    successionLines: [],
     winCheck: null,
   };
 
@@ -554,6 +642,26 @@ export function executeTurn(state: GameState): GameState {
 
   console.log(`  Diplomacy tick: ${(performance.now() - t5).toFixed(1)}ms`);
 
+  // --- Phase 5b: Ruler aging & succession ---
+  const tSucc = performance.now();
+  const { newState: stateAfterRulers, events: rulerEvents } = processRulerAging(s, rng);
+  s = stateAfterRulers;
+  for (const ev of rulerEvents) {
+    summary.successionLines.push(ev.message);
+    summary.diplomaticLines.push(ev.message);
+  }
+  // Keep latest events on state for summary display
+  s = { ...s, rulerEvents };
+  console.log(`  Ruler succession: ${(performance.now() - tSucc).toFixed(1)}ms  (${rulerEvents.length} events)`);
+
+  // --- Expire stale inbox proposals ---
+  s = {
+    ...s,
+    diplomaticInbox: s.diplomaticInbox
+      .map((p) => (p.expiresAt <= s.season ? { ...p, status: 'expired' as const } : p))
+      .filter((p) => p.status === 'pending'),
+  };
+
   // --- Mark eliminations ---
   s = markEliminated(s);
 
@@ -609,69 +717,106 @@ export function executeTurn(state: GameState): GameState {
 // AI DIPLOMACY PROPOSAL GENERATION
 // ============================================================
 
+/**
+ * Generate inbound diplomacy proposals for the player's inbox.
+ *
+ * BUG FIX v2: The original code iterated kingdoms in insertion order and
+ * broke after 3 proposals, causing only early kingdoms (Zhao) to generate
+ * proposals. Now we:
+ *   1. Shuffle kingdom order so all kingdoms get fair chances.
+ *   2. Raise the cap to 5 (inbox can hold more).
+ *   3. Raise baseline chance so proposals appear from many kingdoms.
+ *   4. Add proper status/expiresAt fields so inbox lifecycle is tracked.
+ *   5. Never auto-accept — proposals sit in inbox until player decides.
+ */
 function generateAIProposals(state: GameState, rng: () => number): DiploProposal[] {
   const proposals: DiploProposal[] = [];
   const playerKid = state.playerKingdomId;
   const playerProvCount = Object.values(state.provinces).filter((p) => p.owner === playerKid).length;
+  const PROPOSAL_CAP = 5;
+  const EXPIRES_IN = 4; // proposals expire after 4 seasons if not acted on
 
-  // Set of province IDs where the player has armies (potential threat indicators)
+  // Player army positions
   const playerArmyProvIds = new Set(
     Object.values(state.armies)
       .filter((a) => a.kingdomId === playerKid)
       .map((a) => a.provinceId)
   );
 
-  for (const kingdom of Object.values(state.kingdoms)) {
-    if (kingdom.isPlayer || kingdom.isEliminated) continue;
-    if (proposals.length >= 3) break; // cap at 3 proposals per season
+  // Track which kingdoms already have a pending proposal in the inbox to avoid duplicates
+  const alreadyPending = new Set(
+    state.diplomaticInbox
+      .filter((p) => p.status === 'pending')
+      .map((p) => p.fromKingdomId)
+  );
+
+  // Shuffle kingdom order — critical fix so all kingdoms get equal chances
+  const aiKingdoms = Object.values(state.kingdoms)
+    .filter((k) => !k.isPlayer && !k.isEliminated)
+    .sort(() => rng() - 0.5); // Fisher-Yates equivalent with seeded RNG
+
+  for (const kingdom of aiKingdoms) {
+    if (proposals.length >= PROPOSAL_CAP) break;
+    if (alreadyPending.has(kingdom.id)) continue; // already waiting on this kingdom
 
     const rel = state.relations[kingdom.id]?.[playerKid];
     if (!rel) continue;
-    // Skip if NAP already in place
-    if (rel.treaty?.type === 'nap') continue;
+    if (rel.treaty?.type === 'nap' && rel.treaty.status === 'active') continue; // already has NAP
 
     const aiProvCount = Object.values(state.provinces).filter((p) => p.owner === kingdom.id).length;
 
-    // Check if any player army is in a province adjacent to this AI's territory
     const aiProvinces = Object.values(state.provinces).filter((p) => p.owner === kingdom.id);
     const isPlayerThreatening = aiProvinces.some((p) =>
       p.adjacentTo.some((adj) => playerArmyProvIds.has(adj))
     );
 
-    // Compute base proposal chance
-    let proposalChance = 0.12; // 12% baseline per season
-    if (isPlayerThreatening && rel.score < 0) proposalChance = 0.50;
-    else if (playerProvCount > aiProvCount * 1.5) proposalChance = 0.30;
-    else if (rel.score > 15) proposalChance = 0.20; // friendly kingdoms reach out more
+    // Ruler diplomacy trait bonus
+    const rulerDiploBonus = kingdom.ruler?.traits.includes('honorable') ? 0.10 : 0;
+
+    // Compute base proposal chance — raised from 12% to 18% baseline
+    let proposalChance = 0.18 + rulerDiploBonus;
+    if (isPlayerThreatening && rel.score < 0) proposalChance = 0.55;
+    else if (playerProvCount > aiProvCount * 1.5) proposalChance = 0.35;
+    else if (rel.score > 15) proposalChance = 0.28;
+    else if (kingdom.personality?.traits.includes('honorable')) proposalChance = 0.25;
+    else if (kingdom.personality?.traits.includes('mercantile')) proposalChance = 0.22;
+
+    if (import.meta.env?.DEV) {
+      console.debug(`[Proposals] ${kingdom.id}: chance=${(proposalChance * 100).toFixed(0)}% threatening=${isPlayerThreatening} rel=${rel.score}`);
+    }
 
     if (rng() > proposalChance) continue;
 
     const propId = `dp_${kingdom.id}_s${state.season}_${Math.floor(rng() * 9999)}`;
 
+    let proposal: DiploProposal | null = null;
+
     if (isPlayerThreatening && aiProvCount <= playerProvCount) {
       // Threatened and not dominant — propose peace
-      if (rng() < 0.55) {
-        proposals.push({
+      if (rng() < 0.60) {
+        proposal = {
           id: propId,
           fromKingdomId: kingdom.id,
           type: 'nap_offer',
           terms: `${kingdom.name} seeks stability on its borders and proposes a Non-Aggression Pact lasting 8 seasons.`,
           season: state.season,
-        });
+          expiresAt: state.season + EXPIRES_IN,
+          status: 'pending',
+        };
       } else {
-        // Offer tribute (AI pays player) to avoid conflict
         const amt = 5 + Math.floor(rng() * 15);
-        proposals.push({
+        proposal = {
           id: propId,
           fromKingdomId: kingdom.id,
           type: 'tribute_demand',
-          terms: `${kingdom.name} offers ${amt} gold per season in tribute, hoping to forestall war.`,
+          terms: `${kingdom.name} offers ${amt} gold per season in tribute, hoping to forestall conflict.`,
           tributeAmount: amt,
           season: state.season,
-        });
+          expiresAt: state.season + EXPIRES_IN,
+          status: 'pending',
+        };
       }
     } else if (rel.score > 10 && !isPlayerThreatening) {
-      // Relatively friendly — look for a mutual target pact
       const mutualEnemies = Object.values(state.kingdoms).filter((k) => {
         if (k.isPlayer || k.isEliminated || k.id === kingdom.id) return false;
         const aiRel = state.relations[kingdom.id]?.[k.id];
@@ -681,35 +826,57 @@ function generateAIProposals(state: GameState, rng: () => number): DiploProposal
 
       if (mutualEnemies.length > 0) {
         const target = mutualEnemies[Math.floor(rng() * mutualEnemies.length)];
-        proposals.push({
+        proposal = {
           id: propId,
           fromKingdomId: kingdom.id,
           type: 'mutual_target',
           terms: `${kingdom.name} proposes a coordinated campaign against ${target.name}. They will prioritize attacking ${target.name} this season.`,
           targetKingdomId: target.id,
           season: state.season,
-        });
+          expiresAt: state.season + EXPIRES_IN,
+          status: 'pending',
+        };
       } else {
-        // Plain NAP offer
-        proposals.push({
+        proposal = {
           id: propId,
           fromKingdomId: kingdom.id,
           type: 'nap_offer',
-          terms: `${kingdom.name} believes mutual restraint serves both kingdoms. They propose a Non-Aggression Pact.`,
+          terms: `${kingdom.name} believes mutual restraint serves both kingdoms well. They propose a Non-Aggression Pact.`,
           season: state.season,
-        });
+          expiresAt: state.season + EXPIRES_IN,
+          status: 'pending',
+        };
       }
     } else if (rel.score < -30 && playerProvCount < aiProvCount) {
-      // AI is dominant and hostile — demand tribute
       const amt = 10 + Math.floor(rng() * 20);
-      proposals.push({
+      proposal = {
         id: propId,
         fromKingdomId: kingdom.id,
         type: 'tribute_demand',
-        terms: `${kingdom.name} demands ${amt} gold per season in tribute or they will consider war.`,
+        terms: `${kingdom.name} demands ${amt} gold per season in tribute or they will consider open war.`,
         tributeAmount: amt,
         season: state.season,
-      });
+        expiresAt: state.season + EXPIRES_IN,
+        status: 'pending',
+      };
+    } else if (proposalChance > 0.20 && !proposal) {
+      // Fallback: friendly/neutral kingdoms sometimes reach out with a simple NAP
+      proposal = {
+        id: propId,
+        fromKingdomId: kingdom.id,
+        type: 'nap_offer',
+        terms: `${kingdom.name} reaches out diplomatically, proposing a Non-Aggression Pact.`,
+        season: state.season,
+        expiresAt: state.season + EXPIRES_IN,
+        status: 'pending',
+      };
+    }
+
+    if (proposal) {
+      proposals.push(proposal);
+      if (import.meta.env?.DEV) {
+        console.debug(`[Proposals] ${kingdom.id} → ${proposal.type} (pending, expires S${proposal.expiresAt})`);
+      }
     }
   }
 

@@ -1,8 +1,15 @@
-import { GameState, Kingdom, Province } from './types';
+import { GameState, Kingdom, Province, Army } from './types';
+import { getRulerCombatBonus, getRulerIncomeBonus } from './ruler';
 
 // Upkeep: per 1000 troops per season
 const GOLD_UPKEEP_PER_K = 0.4;
 const FOOD_UPKEEP_PER_K = 0.8;
+
+// Auto-replenishment: troops recovered per season when resting in friendly territory
+const REPLENISH_BASE = 80;         // base troops per season
+const REPLENISH_BARRACKS_BONUS = 80; // extra with barracks
+const REPLENISH_CAPITAL_BONUS = 40;  // extra in capital
+const REPLENISH_MAX_PER_SEASON = 500; // hard cap
 
 // Reform modifiers applied on top of kingdom modifiers
 export function getReformModifiers(reform: string | null) {
@@ -30,7 +37,8 @@ export function provinceIncome(p: Province, k: Kingdom): number {
   if (p.hasMarket) base += 2;
   const unrestPenalty = 1 - p.unrest / 200; // max 50% reduction
   const reform = getReformModifiers(k.activeReform);
-  return Math.max(0, base * unrestPenalty * k.incomeModifier * reform.income);
+  const rulerBonus = k.ruler ? (1 + getRulerIncomeBonus(k.ruler)) : 1;
+  return Math.max(0, base * unrestPenalty * k.incomeModifier * reform.income * rulerBonus);
 }
 
 // Province food output
@@ -59,12 +67,64 @@ function armyUpkeep(armySize: number, k: Kingdom): { gold: number; food: number 
   return { gold: goldUpkeep, food: foodUpkeep };
 }
 
+/**
+ * Auto-replenishment: armies resting in friendly provinces recover troops.
+ * Rate depends on province infrastructure. Draws from kingdom manpower pool.
+ * Called as part of the economy phase.
+ */
+export function autoReplenishArmies(
+  armies: Record<string, Army>,
+  provinces: Record<string, Province>,
+  kingdom: { id: string; manpower: number; food: number }
+): { newArmies: Record<string, Army>; manpowerUsed: number } {
+  const newArmies = { ...armies };
+  let manpowerUsed = 0;
+  let remainingManpower = kingdom.manpower;
+
+  const myArmies = Object.values(armies).filter(
+    (a) => a.kingdomId === kingdom.id && a.size > 0
+  );
+
+  for (const army of myArmies) {
+    if (remainingManpower <= 0) break;
+    const prov = provinces[army.provinceId];
+    if (!prov || prov.owner !== kingdom.id) continue; // only replenish in own territory
+
+    const maxSize = army.maxSize ?? army.size; // cap at peak size
+    if (army.size >= maxSize) continue; // already at max
+
+    // Compute replenish rate
+    let rate = REPLENISH_BASE;
+    if (prov.hasBarracks) rate += REPLENISH_BARRACKS_BONUS;
+    if (prov.isCapital) rate += REPLENISH_CAPITAL_BONUS;
+    rate = Math.min(rate, REPLENISH_MAX_PER_SEASON);
+    rate = Math.min(rate, maxSize - army.size); // don't exceed max
+
+    // Each 10 troops costs 1 manpower point
+    const mpCost = Math.ceil(rate / 10);
+    const actualMpCost = Math.min(mpCost, Math.floor(remainingManpower));
+    const actualTroops = actualMpCost * 10;
+
+    if (actualTroops <= 0) continue;
+
+    newArmies[army.id] = {
+      ...army,
+      size: army.size + actualTroops,
+      morale: Math.min(100, army.morale + 2), // slow morale recovery too
+    };
+    remainingManpower -= actualMpCost;
+    manpowerUsed += actualMpCost;
+  }
+
+  return { newArmies, manpowerUsed };
+}
+
 export function economyPhase(
   state: GameState
 ): { newState: GameState; lines: string[] } {
   const newProvinces = { ...state.provinces };
   const newKingdoms = { ...state.kingdoms };
-  const newArmies = { ...state.armies };
+  let newArmies = { ...state.armies };
   const lines: string[] = [];
 
   for (const kid of Object.keys(newKingdoms)) {
@@ -97,12 +157,23 @@ export function economyPhase(
     // Propaganda reform costs 5 gold/turn
     if (k.activeReform === 'propaganda') goldUpkeepTotal += 5;
 
-    // 3. Apply
+    // 3. Apply resources
     k.treasury = Math.max(-50, k.treasury + totalGold - goldUpkeepTotal);
     k.food = Math.max(0, k.food + totalFood - foodUpkeepTotal);
-    k.manpower = Math.min(100, k.manpower + Math.floor(totalManpower * 0.2));
 
-    // 4. Stability adjustments
+    // 4. Manpower replenishment (from provinces)
+    const newManpower = Math.min(100, k.manpower + Math.floor(totalManpower * 0.2));
+
+    // 5. Auto-replenishment: armies recover in friendly territory
+    const replenishResult = autoReplenishArmies(newArmies, state.provinces, {
+      id: kid,
+      manpower: newManpower,
+      food: k.food,
+    });
+    newArmies = replenishResult.newArmies;
+    k.manpower = Math.max(0, newManpower - replenishResult.manpowerUsed);
+
+    // 6. Stability adjustments
     if (k.treasury < 0) {
       k.stability = Math.max(0, k.stability - 5);
       lines.push(`${k.name} is bankrupt! Stability −5.`);
@@ -110,26 +181,24 @@ export function economyPhase(
       k.stability = Math.min(100, k.stability + 1);
     }
 
-    // Propaganda reform slowly raises stability
     if (k.activeReform === 'propaganda') {
       k.stability = Math.min(100, k.stability + 3);
     }
 
-    // Conscription one-time hit: handled when reform is set
-    // 5. Food attrition
+    // 7. Food attrition
     if (k.food <= 0) {
       for (const army of kingdomArmies) {
         const attrition = Math.floor(army.size * 0.05);
         newArmies[army.id] = {
-          ...army,
-          size: Math.max(500, army.size - attrition),
-          morale: Math.max(10, army.morale - 10),
+          ...newArmies[army.id],
+          size: Math.max(500, (newArmies[army.id]?.size ?? army.size) - attrition),
+          morale: Math.max(10, (newArmies[army.id]?.morale ?? army.morale) - 10),
         };
       }
       lines.push(`${k.name} armies suffer attrition from food shortage!`);
     }
 
-    // 6. Riverlands morale recovery for Chu
+    // 8. Riverlands morale recovery for Chu
     if (kid === 'chu') {
       for (const army of kingdomArmies) {
         const p = state.provinces[army.provinceId];
@@ -145,13 +214,12 @@ export function economyPhase(
     newKingdoms[kid] = k;
   }
 
-  // 7. Unrest decay in all provinces
+  // 9. Unrest decay in all provinces
   for (const pid of Object.keys(newProvinces)) {
     const p = newProvinces[pid];
     const k = newKingdoms[p.owner];
     if (!k) continue;
     const decayRate = k.id === 'zhongshan' ? 6 : 3;
-    // Salt bonus
     const saltBonus = p.hasSalt ? 5 : 0;
     newProvinces[pid] = {
       ...p,

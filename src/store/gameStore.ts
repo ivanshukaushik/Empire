@@ -4,7 +4,7 @@ import { GameState, PlayerAction, ActionType, DiploProposal } from '../engine/ty
 import { createInitialState } from '../engine/initialState';
 import { validateAction, applyPlayerAction, executeTurn, isCampaignAction } from '../engine/turnEngine';
 import { createRng } from '../engine/rng';
-import { proposeNAP } from '../engine/diplomacy';
+import { forceAcceptNAP, breachTreaty, deepCopyRelations } from '../engine/diplomacy';
 import { resolveSeed } from '../config';
 
 // ============================================================
@@ -23,7 +23,6 @@ interface GameStore {
   loadGame: () => boolean;
   setSelectedProvince: (provinceId: string | null) => void;
   setActionBeingPlanned: (actionType: ActionType | null) => void;
-  /** Store the army ID that is currently being moved or attacking */
   setPendingMoveArmy: (armyId: string | null) => void;
   clearFeedback: () => void;
   resetGame: () => void;
@@ -33,9 +32,11 @@ interface GameStore {
   acceptProposal: (proposalId: string) => void;
   /** Decline an inbound diplomatic proposal */
   declineProposal: (proposalId: string) => void;
+  /** Breach an active treaty with another kingdom */
+  breachTreatyWith: (targetKingdomId: string) => void;
 }
 
-const SAVE_KEY = 'warring-states-v2-save';
+const SAVE_KEY = 'warring-states-v3-save';
 
 export const useGameStore = create<GameStore>()(
   immer((set, get) => ({
@@ -63,7 +64,6 @@ export const useGameStore = create<GameStore>()(
         return;
       }
 
-      // RNG seeded from ordersRemaining so determinism is preserved
       const rng = createRng(
         gameState.seed + gameState.season * 100 + gameState.ordersRemaining
       );
@@ -94,7 +94,6 @@ export const useGameStore = create<GameStore>()(
       if (!gameState) return;
       if (gameState.phase !== 'player_planning') return;
 
-      // Set phase to 'executing' first so the "Resolving…" overlay renders.
       set({
         gameState: {
           ...gameState,
@@ -104,10 +103,7 @@ export const useGameStore = create<GameStore>()(
         },
       });
 
-      // Yield to the browser so it can flush the paint (show the overlay)
-      // before we block the main thread with season resolution.
       requestAnimationFrame(() => {
-        // One extra tick ensures the overlay is actually composited.
         setTimeout(() => {
           const { gameState: current } = get();
           if (!current) return;
@@ -116,7 +112,6 @@ export const useGameStore = create<GameStore>()(
             set({ gameState: newState });
           } catch (err) {
             console.error('[endTurn] executeTurn threw — resetting to player_planning:', err);
-            // Return to planning phase so the player isn't permanently stuck.
             set({
               gameState: { ...current, phase: 'player_planning' },
               actionFeedback: '⚠ Season resolution failed — check the console for details.',
@@ -143,7 +138,7 @@ export const useGameStore = create<GameStore>()(
       try {
         localStorage.setItem(
           SAVE_KEY,
-          JSON.stringify({ version: '2.0', savedAt: new Date().toISOString(), state: gameState })
+          JSON.stringify({ version: '3.0', savedAt: new Date().toISOString(), state: gameState })
         );
       } catch (e) {
         console.error('Save failed:', e);
@@ -152,20 +147,46 @@ export const useGameStore = create<GameStore>()(
 
     loadGame: () => {
       try {
-        // Try current save key first, then legacy key for backward compat
-        const raw = localStorage.getItem(SAVE_KEY) ?? localStorage.getItem('warring-states-v1-save');
+        const raw = localStorage.getItem(SAVE_KEY)
+          ?? localStorage.getItem('warring-states-v2-save')
+          ?? localStorage.getItem('warring-states-v1-save');
         if (!raw) return false;
         const save = JSON.parse(raw);
         if (!save?.state) return false;
-        // Migrate old saves: add missing fields from new schema
         const loaded = save.state as Partial<GameState>;
+        // Build migrated state with safe defaults and field migrations
+        const migratedKingdoms = Object.fromEntries(
+          Object.entries((loaded.kingdoms ?? {}) as Record<string, any>).map(([k, v]) => [
+            k, { treatyBreachCount: 0, ...v },
+          ])
+        );
+        const migratedInbox = ((loaded.diplomaticInbox ?? []) as any[]).map((p: any) => ({
+          status: 'pending',
+          expiresAt: (loaded.season ?? 1) + 4,
+          ...p,
+        }));
+        const migratedRelations = Object.fromEntries(
+          Object.entries((loaded.relations ?? {}) as Record<string, any>).map(([k1, inner]) => [
+            k1,
+            Object.fromEntries(
+              Object.entries(inner as Record<string, any>).map(([k2, rel]: [string, any]) => [
+                k2,
+                { ...rel, treaty: rel.treaty ? { status: 'active', signedAt: 0, ...rel.treaty } : null },
+              ])
+            ),
+          ])
+        );
         const migrated: GameState = {
           ordersRemaining: 2,
           maxOrders: 2,
           provinceDomesticUsed: {},
           armyCampaignUsed: {},
-          diplomaticInbox: [],
+          rulerEvents: [],
+          toastMessages: [],
           ...loaded,
+          kingdoms: migratedKingdoms,
+          diplomaticInbox: migratedInbox,
+          relations: migratedRelations,
         } as GameState;
         set({ gameState: migrated });
         return true;
@@ -205,6 +226,12 @@ export const useGameStore = create<GameStore>()(
       });
     },
 
+    /**
+     * Accept an inbound diplomatic proposal.
+     * FIX: For nap_offer, we use forceAcceptNAP — the AI has already expressed
+     * desire for peace by sending the proposal; we should NOT re-roll the
+     * probability (which could silently fail and confuse the player).
+     */
     acceptProposal: (proposalId) => {
       const { gameState } = get();
       if (!gameState) return;
@@ -216,26 +243,23 @@ export const useGameStore = create<GameStore>()(
       let message = '';
 
       if (proposal.type === 'nap_offer') {
-        const rng = createRng(gameState.seed + gameState.season * 77 + Date.now() % 999);
-        const result = proposeNAP(newState, kid, proposal.fromKingdomId, rng);
+        // FIXED: force-accept — the AI already sent this proposal, don't re-roll
+        const result = forceAcceptNAP(newState, kid, proposal.fromKingdomId);
         newState = result.newState;
-        message = `Accepted NAP offer from ${gameState.kingdoms[proposal.fromKingdomId]?.name}.`;
+        message = `Non-Aggression Pact accepted with ${gameState.kingdoms[proposal.fromKingdomId]?.name}.`;
       } else if (proposal.type === 'tribute_demand') {
-        // AI pays us tribute — improve relations, add to upcoming season income
+        // AI pays us tribute
         const amount = proposal.tributeAmount ?? 10;
         const fromK = { ...newState.kingdoms[proposal.fromKingdomId] };
         fromK.treasury = Math.max(0, fromK.treasury - amount);
         const playerK = { ...newState.kingdoms[kid] };
         playerK.treasury += amount;
-        const newRelations = { ...newState.relations };
+        const newRelations = deepCopyRelations(newState.relations);
         if (newRelations[kid]?.[proposal.fromKingdomId]) {
-          newRelations[kid] = {
-            ...newRelations[kid],
-            [proposal.fromKingdomId]: {
-              ...newRelations[kid][proposal.fromKingdomId],
-              score: Math.min(100, (newRelations[kid][proposal.fromKingdomId].score ?? 0) + 15),
-            },
-          };
+          newRelations[kid][proposal.fromKingdomId].score = Math.min(
+            100,
+            (newRelations[kid][proposal.fromKingdomId].score ?? 0) + 15
+          );
         }
         newState = {
           ...newState,
@@ -244,27 +268,29 @@ export const useGameStore = create<GameStore>()(
         };
         message = `Accepted tribute from ${gameState.kingdoms[proposal.fromKingdomId]?.name}: +${amount} gold.`;
       } else if (proposal.type === 'mutual_target') {
-        // Soft pact: improve relations with proposer, worsen with target
+        // Soft pact: improve relations with proposer
         const fromName = gameState.kingdoms[proposal.fromKingdomId]?.name ?? '';
-        const newRelations = { ...newState.relations };
+        const newRelations = deepCopyRelations(newState.relations);
         if (newRelations[kid]?.[proposal.fromKingdomId]) {
-          newRelations[kid] = {
-            ...newRelations[kid],
-            [proposal.fromKingdomId]: {
-              ...newRelations[kid][proposal.fromKingdomId],
-              score: Math.min(100, (newRelations[kid][proposal.fromKingdomId].score ?? 0) + 10),
-            },
-          };
+          newRelations[kid][proposal.fromKingdomId].score = Math.min(
+            100,
+            (newRelations[kid][proposal.fromKingdomId].score ?? 0) + 10
+          );
         }
         newState = { ...newState, relations: newRelations };
-        message = `Agreed to coordinate with ${fromName} against ${proposal.targetKingdomId ? (gameState.kingdoms[proposal.targetKingdomId]?.name ?? '') : 'common foes'}.`;
+        const targetName = proposal.targetKingdomId
+          ? (gameState.kingdoms[proposal.targetKingdomId]?.name ?? '')
+          : 'common foes';
+        message = `Agreed to coordinate with ${fromName} against ${targetName}.`;
       }
 
-      // Remove proposal from inbox
+      // Mark proposal accepted and remove from inbox
       newState = {
         ...newState,
-        diplomaticInbox: newState.diplomaticInbox.filter((p) => p.id !== proposalId),
-        turnLog: [...newState.turnLog, { season: newState.season, type: 'diplomacy', message }],
+        diplomaticInbox: newState.diplomaticInbox
+          .map((p) => p.id === proposalId ? { ...p, status: 'accepted' as const } : p)
+          .filter((p) => p.status === 'pending'),
+        turnLog: [...newState.turnLog, { season: newState.season, type: 'diplomacy' as const, message }],
       };
 
       set({ gameState: newState, actionFeedback: message });
@@ -280,26 +306,46 @@ export const useGameStore = create<GameStore>()(
       const fromName = gameState.kingdoms[proposal.fromKingdomId]?.name ?? '';
 
       // Small relations penalty for declining
-      const newRelations = { ...gameState.relations };
+      const newRelations = deepCopyRelations(gameState.relations);
       if (newRelations[kid]?.[proposal.fromKingdomId]) {
-        newRelations[kid] = {
-          ...newRelations[kid],
-          [proposal.fromKingdomId]: {
-            ...newRelations[kid][proposal.fromKingdomId],
-            score: Math.max(-100, (newRelations[kid][proposal.fromKingdomId].score ?? 0) - 5),
-          },
-        };
+        newRelations[kid][proposal.fromKingdomId].score = Math.max(
+          -100,
+          (newRelations[kid][proposal.fromKingdomId].score ?? 0) - 5
+        );
       }
 
       const message = `Declined proposal from ${fromName}.`;
       const newState = {
         ...gameState,
         relations: newRelations,
-        diplomaticInbox: gameState.diplomaticInbox.filter((p) => p.id !== proposalId),
+        diplomaticInbox: gameState.diplomaticInbox
+          .map((p) => p.id === proposalId ? { ...p, status: 'declined' as const } : p)
+          .filter((p) => p.status === 'pending'),
         turnLog: [...gameState.turnLog, { season: gameState.season, type: 'diplomacy' as const, message }],
       };
 
       set({ gameState: newState, actionFeedback: message });
+    },
+
+    breachTreatyWith: (targetKingdomId) => {
+      const { gameState } = get();
+      if (!gameState) return;
+
+      const { newState, message } = breachTreaty(gameState, gameState.playerKingdomId, targetKingdomId);
+      const logEntry = {
+        season: newState.season,
+        type: 'diplomacy' as const,
+        message,
+        kingdomId: gameState.playerKingdomId,
+      };
+
+      set({
+        gameState: {
+          ...newState,
+          turnLog: [...newState.turnLog, logEntry],
+        },
+        actionFeedback: message,
+      });
     },
   }))
 );

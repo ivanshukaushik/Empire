@@ -14,6 +14,7 @@ import {
   STARTING_FORTS,
 } from '../data/gameData';
 import { DEFAULT_MAX_ORDERS } from '../config';
+import { generateRuler } from './ruler';
 
 // ============================================================
 // BUILD INITIAL GAME STATE
@@ -44,9 +45,11 @@ export function createInitialState(seed: number, playerKingdomId: string): GameS
     };
   }
 
-  // Build kingdoms
+  // Build kingdoms (with rulers)
+  const rng = createRng(seed);
   const kingdoms: Record<string, Kingdom> = {};
   for (const def of KINGDOM_DEFS) {
+    const ruler = generateRuler(def.id, rng, 1, 35 + Math.floor(rng() * 25));
     kingdoms[def.id] = {
       ...def,
       isPlayer: def.id === playerKingdomId,
@@ -54,13 +57,15 @@ export function createInitialState(seed: number, playerKingdomId: string): GameS
       personality: def.personality
         ? JSON.parse(JSON.stringify(def.personality))
         : undefined,
+      ruler,
+      treatyBreachCount: 0,
     };
   }
 
-  // Build armies
+  // Build armies (with maxSize = starting size)
   const armies: Record<string, Army> = {};
   for (const def of ARMY_DEFS) {
-    armies[def.id] = { ...def };
+    armies[def.id] = { ...def, maxSize: def.size };
   }
 
   // Build relations: all start at 0, except Qin starts at −20 with everyone
@@ -110,10 +115,9 @@ export function createInitialState(seed: number, playerKingdomId: string): GameS
     pendingMoveArmyId: null,
     helpSeen: false,
     diplomaticInbox: [],
+    rulerEvents: [],
+    toastMessages: [],
   };
-
-  // Attach the RNG (re-created from seed each load)
-  (state as GameState & { rng: () => number }).rng = createRng(seed);
 
   return state;
 }

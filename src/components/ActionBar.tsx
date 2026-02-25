@@ -55,6 +55,10 @@ export default function ActionBar() {
     : null;
   const armyActed = !!(armyInProv && armyCampaignUsed?.[armyInProv.id]);
 
+  // Levy cooldown check
+  const levyCooldownUntil = selectedProv?.levyCooldownUntil ?? 0;
+  const levyCooldownRemaining = Math.max(0, levyCooldownUntil - gameState.season);
+
   function startAttack() {
     if (!isPlanning || !hasOrders) return;
     setAction('attack');
@@ -96,11 +100,19 @@ export default function ActionBar() {
   const canRecruit = isPlanning && isOwnProv && !provDomesticUsed
     && !!(selectedProv?.hasBarracks || selectedProv?.isCapital || playerKingdomId === 'qi');
 
+  const canLevy = isPlanning && !!isOwnProv && hasOrders && levyCooldownRemaining === 0;
+  const canSplit = isPlanning && !!armyInProv && (armyInProv.size ?? 0) >= 2000;
+
   const buildDisableReason = !isPlanning ? '' : !isOwnProv ? noProvTip : provDomesticUsed ? domUsedTip : '';
   const recruitDisableReason = !isPlanning ? '' : !isOwnProv ? noProvTip
     : provDomesticUsed ? domUsedTip
     : !(selectedProv?.hasBarracks || selectedProv?.isCapital || playerKingdomId === 'qi') ? noBarracksTip
     : '';
+  const levyDisableReason = !isPlanning ? '' : !isOwnProv ? noProvTip
+    : !hasOrders ? noOrdersTip
+    : levyCooldownRemaining > 0 ? `Levy on cooldown (${levyCooldownRemaining} seasons remaining)` : '';
+  const splitDisableReason = !isPlanning ? '' : !armyInProv ? 'No army in selected province'
+    : (armyInProv.size ?? 0) < 2000 ? 'Army needs 2000+ troops to split' : '';
 
   const attackDisableReason = !isPlanning ? '' : !hasOrders ? noOrdersTip : '';
   const moveDisableReason   = !isPlanning ? '' : !hasOrders ? noOrdersTip : '';
@@ -137,6 +149,24 @@ export default function ActionBar() {
             queueAction({ type: 'recruit', apCost: 0, provinceId: pid, recruitAmount: 3 });
           }}
         />
+        <Btn
+          label="👥 Levy"
+          tip={levyDisableReason || `Emergency manpower levy: costs 5 gold + stability −3, 4-season cooldown (1 Order) — L`}
+          disabled={!canLevy}
+          onClick={() => {
+            if (!pid) return;
+            queueAction({ type: 'levy', apCost: 1, provinceId: pid, levyAmount: 20 });
+          }}
+        />
+        <Btn
+          label="✂ Split"
+          tip={splitDisableReason || `Split selected army 50/50 into two groups — free action — X`}
+          disabled={!canSplit}
+          onClick={() => {
+            if (!armyInProv) return;
+            queueAction({ type: 'split_army', apCost: 0, armyId: armyInProv.id, splitFraction: 0.5 });
+          }}
+        />
       </Group>
 
       <Divider />
@@ -170,7 +200,7 @@ export default function ActionBar() {
       {/* ── Intel ────────────────────────────── */}
       <Group label="Intel">
         <Btn label="🔍 Scout"
-          tip={scoutDisableReason || 'Reveal enemy province details for 3 seasons (1 Order) — S'}
+          tip={scoutDisableReason || 'Reveal enemy province details for 3 seasons (1 Order) — I'}
           disabled={!isPlanning || !hasOrders || !isEnemyProv}
           onClick={() => pid && queueAction({ type: 'espionage_scout', apCost: 1, targetProvinceId: pid })}
         />
@@ -203,7 +233,7 @@ export default function ActionBar() {
               <div className="space-y-0.5 mb-3">
                 {otherKingdoms.map((k) => {
                   const rel = gameState.relations[playerKingdomId]?.[k.id];
-                  const hasNap = rel?.treaty?.type === 'nap';
+                  const hasNap = rel?.treaty?.type === 'nap' && rel.treaty.status === 'active';
                   const score = rel?.score ?? 0;
                   return (
                     <button
@@ -309,9 +339,12 @@ export default function ActionBar() {
       <div className="text-xs text-gray-700 shrink-0 hidden lg:flex gap-2 mr-2">
         <span title="Attack">A</span>
         <span title="Move">M</span>
-        <span title="Scout selected">S</span>
+        <span title="Split army">X</span>
+        <span title="Scout selected">I</span>
         <span title="Recruit at selected">R</span>
-        <span title="End season">↵</span>
+        <span title="Accept inbox proposal">Y</span>
+        <span title="Decline inbox proposal">N</span>
+        <span title="End season">S/↵</span>
         <span title="Cancel">Esc</span>
       </div>
 
@@ -320,7 +353,7 @@ export default function ActionBar() {
         className={`btn-primary px-5 py-2 shrink-0 font-medium ${!isPlanning ? 'opacity-50 cursor-not-allowed' : ''}`}
         disabled={!isPlanning}
         onClick={endTurn}
-        title="End Season [Enter]"
+        title="End Season [S or Enter]"
       >
         End Season ▶
       </button>

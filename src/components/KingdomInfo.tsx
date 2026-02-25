@@ -3,16 +3,20 @@ import { useGameStore } from '../store/gameStore';
 import { SEASON_NAMES } from '../engine/turnEngine';
 import { provinceIncome, provinceFood } from '../engine/economy';
 import { StatTooltip } from './Tooltip';
+import { BREACH_CONSEQUENCES } from '../engine/diplomacy';
+import type { Ruler } from '../engine/types';
 
 type Tab = 'overview' | 'military' | 'diplomacy';
 
 export default function KingdomInfo() {
-  const gameState       = useGameStore((s) => s.gameState!);
-  const saveGame        = useGameStore((s) => s.saveGame);
-  const resetGame       = useGameStore((s) => s.resetGame);
-  const acceptProposal  = useGameStore((s) => s.acceptProposal);
-  const declineProposal = useGameStore((s) => s.declineProposal);
-  const [tab, setTab]   = useState<Tab>('overview');
+  const gameState          = useGameStore((s) => s.gameState!);
+  const saveGame           = useGameStore((s) => s.saveGame);
+  const resetGame          = useGameStore((s) => s.resetGame);
+  const acceptProposal     = useGameStore((s) => s.acceptProposal);
+  const declineProposal    = useGameStore((s) => s.declineProposal);
+  const breachTreatyWith   = useGameStore((s) => s.breachTreatyWith);
+  const [tab, setTab]      = useState<Tab>('overview');
+  const [confirmBreach, setConfirmBreach] = useState<string | null>(null);
 
   const kid        = gameState.playerKingdomId;
   const player     = gameState.kingdoms[kid];
@@ -26,7 +30,6 @@ export default function KingdomInfo() {
   const myArmies    = Object.values(gameState.armies).filter((a) => a.kingdomId === kid);
   const totalTroops = myArmies.reduce((s, a) => s + a.size, 0);
 
-  // Next season forecast
   const forecastGold = ownedProvs.reduce((s, p) => s + provinceIncome(p, player), 0);
   const forecastFood = ownedProvs.reduce((s, p) => s + provinceFood(p, player, gameState.season), 0);
   const upkeepGold   = myArmies.reduce((s, a) => s + (a.size / 1000) * 0.4 * player.armyCostModifier, 0);
@@ -34,7 +37,12 @@ export default function KingdomInfo() {
   const netGold      = forecastGold - upkeepGold - (player.activeReform === 'propaganda' ? 5 : 0);
   const netFood      = forecastFood - upkeepFood;
 
-  const inboxCount = gameState.diplomaticInbox.length;
+  const inboxCount = gameState.diplomaticInbox.filter((p) => p.status === 'pending').length;
+
+  function handleBreach(targetKid: string) {
+    breachTreatyWith(targetKid);
+    setConfirmBreach(null);
+  }
 
   return (
     <div className="flex flex-col h-full overflow-hidden text-xs">
@@ -47,6 +55,12 @@ export default function KingdomInfo() {
           </span>
         </div>
         <div className="text-gray-600">{player.archetype}</div>
+        {player.ruler && (
+          <div className="text-gray-500 mt-0.5 text-[10px]">
+            👑 {player.ruler.name}, {player.ruler.age}yr
+            · {player.ruler.traits.slice(0, 2).join(', ')}
+          </div>
+        )}
         <div className="text-gray-600 mt-0.5">{seasonName} · {gameState.year} BCE</div>
       </div>
 
@@ -99,6 +113,7 @@ export default function KingdomInfo() {
             playerKid={kid}
             acceptProposal={acceptProposal}
             declineProposal={declineProposal}
+            onBreachRequest={(targetKid: string) => setConfirmBreach(targetKid)}
           />
         )}
       </div>
@@ -108,21 +123,59 @@ export default function KingdomInfo() {
         <button className="btn-ghost w-full text-[10px] py-1" onClick={saveGame}>💾 Save</button>
         <button className="btn-ghost w-full text-[10px] py-1 text-red-500" onClick={resetGame}>✕ Abandon</button>
       </div>
+
+      {/* Breach confirmation modal */}
+      {confirmBreach && (() => {
+        const targetK = gameState.kingdoms[confirmBreach];
+        const treaty = gameState.relations[kid]?.[confirmBreach]?.treaty;
+        const c = BREACH_CONSEQUENCES;
+        return (
+          <div className="absolute inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
+            <div className="bg-gray-950 border border-red-800 rounded-xl p-5 max-w-xs w-full shadow-2xl">
+              <h3 className="text-sm font-bold text-red-400 mb-2">⚠ Breach Treaty?</h3>
+              <p className="text-xs text-gray-300 mb-3">
+                Breaking the <strong>{treaty?.type === 'nap' ? 'Non-Aggression Pact' : 'Tribute Treaty'}</strong> with{' '}
+                <span style={{ color: targetK?.color }}>{targetK?.name}</span>:
+              </p>
+              <div className="space-y-1 text-xs text-red-400 mb-4">
+                <div>Relations with {targetK?.name}: <strong>−{Math.abs(c.relationsWithTarget)}</strong></div>
+                <div>Reputation (global): <strong>−{Math.abs(c.reputationChange)}</strong></div>
+                <div>Stability: <strong>−{Math.abs(c.stabilityChange)}</strong></div>
+                <div>All other kingdoms: <strong>−{Math.abs(c.coalitionPressure)} relations</strong></div>
+              </div>
+              <div className="flex gap-2">
+                <button
+                  className="flex-1 text-xs py-1.5 rounded bg-red-900/50 border border-red-700 text-red-300 hover:bg-red-900"
+                  onClick={() => handleBreach(confirmBreach)}
+                >
+                  ⚔ Breach Treaty
+                </button>
+                <button
+                  className="flex-1 text-xs py-1.5 rounded bg-gray-800 border border-gray-700 text-gray-400 hover:bg-gray-700"
+                  onClick={() => setConfirmBreach(null)}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
 
-// ── Overview Tab ─────────────────────────────────────────────
+// ── Overview Tab ──────────────────────────────────────────────
 function OverviewTab({ player, gameState, ownedProvs, totalProvs, winTarget, progress, netGold, netFood, forecastGold, forecastFood, upkeepGold, upkeepFood }: any) {
   const orders    = gameState.ordersRemaining as number;
   const maxOrders = gameState.maxOrders as number;
 
   return (
     <>
-      {/* Orders indicator — most actionable info */}
+      {/* Orders indicator */}
       <div className="bg-gray-900 rounded-lg p-2.5 border border-gray-800">
         <div className="flex items-center justify-between mb-1.5">
-          <StatTooltip tip="Orders are your campaign capacity. Each Move, Attack, Espionage, Diplomacy, and Reform action costs 1 Order. Build and Recruit are free domestic actions.">
+          <StatTooltip tip="Orders are your campaign capacity. Move, Attack, Espionage, Diplomacy, Reform, and Levy each cost 1 Order. Build and Recruit are free domestic actions.">
             <span className="text-gray-400 font-semibold cursor-help">Orders this season</span>
           </StatTooltip>
           <span className={`font-bold text-sm ${orders > 0 ? 'text-amber-400' : 'text-gray-600'}`}>
@@ -138,37 +191,45 @@ function OverviewTab({ player, gameState, ownedProvs, totalProvs, winTarget, pro
           ))}
         </div>
         {orders === 0 && (
-          <div className="text-gray-600 text-[10px] mt-1 italic">End season to refresh orders</div>
+          <div className="text-gray-600 text-[10px] mt-1 italic">End season (S) to refresh orders</div>
         )}
       </div>
+
+      {/* Ruler card */}
+      {player.ruler && <RulerCard ruler={player.ruler} />}
 
       {/* Resources */}
       <Section title="Resources">
         <ResourceRow
           icon="💰" label="Treasury" value={Math.floor(player.treasury)}
           color={player.treasury < 20 ? 'text-red-400' : 'text-yellow-400'}
-          tip="Gold. Army upkeep deducted each season. Negative treasury → stability −5/season."
+          tip="Gold. Army upkeep deducted each season. Negative → stability −5/season."
         />
         <ResourceRow
           icon="🌾" label="Food" value={Math.floor(player.food)}
           color={player.food < 20 ? 'text-red-400' : 'text-green-400'}
-          tip="Feeds your armies. Shortage → morale drops and troops die in winter."
+          tip="Feeds armies. Shortage → morale drops and troops die."
         />
         <ResourceRow
           icon="⚔" label="Manpower" value={Math.floor(player.manpower)}
           color="text-blue-400"
-          tip="Manpower pool for recruiting. Replenishes from province barracks each season."
+          tip="Pool for recruiting. Auto-replenishes from provinces. Levy adds instantly."
         />
         <ResourceRow
           icon="⚖" label="Stability" value={player.stability}
           color={player.stability > 60 ? 'text-green-400' : player.stability > 30 ? 'text-yellow-400' : 'text-red-400'}
-          tip="Kingdom health (0–100). Hits 0 → you lose. Drops if bankrupt or capital attacked."
+          tip="Kingdom health (0–100). Hits 0 → you lose."
         />
         <ResourceRow
           icon="🎭" label="Reputation" value={player.reputation >= 0 ? `+${player.reputation}` : String(player.reputation)}
           color={player.reputation >= 0 ? 'text-gray-300' : 'text-red-400'}
-          tip="Diplomatic standing. Breaking NAPs reduces it; honoring treaties increases it."
+          tip="Diplomatic standing. Breaking treaties reduces it; honoring them increases it."
         />
+        {(player.treatyBreachCount ?? 0) > 0 && (
+          <div className="text-red-500 text-[10px] italic">
+            ⚠ {player.treatyBreachCount} treaty breach{(player.treatyBreachCount ?? 0) > 1 ? 'es' : ''} on record
+          </div>
+        )}
       </Section>
 
       {/* Next season forecast */}
@@ -208,14 +269,12 @@ function OverviewTab({ player, gameState, ownedProvs, totalProvs, winTarget, pro
         <div className="text-gray-600">{progress}% — need 60%</div>
       </Section>
 
-      {/* Active reform */}
       {player.activeReform && (
         <Section title="Active Reform">
           <span className="text-amber-300 capitalize">{player.activeReform.replace(/_/g, ' ')}</span>
         </Section>
       )}
 
-      {/* Traits */}
       <Section title="Kingdom Traits">
         <div className="text-green-500">✓ {player.bonusDescription}</div>
         <div className="text-red-500 mt-0.5">✗ {player.weaknessDescription}</div>
@@ -224,9 +283,41 @@ function OverviewTab({ player, gameState, ownedProvs, totalProvs, winTarget, pro
   );
 }
 
-// ── Military Tab ─────────────────────────────────────────────
+// ── Ruler Card ────────────────────────────────────────────────
+function RulerCard({ ruler }: { ruler: Ruler }) {
+  const statBar = (val: number, label: string, color: string) => (
+    <div className="flex items-center gap-1.5 text-[10px]">
+      <span className="text-gray-600 w-9">{label}</span>
+      <div className="flex-1 h-1 bg-gray-800 rounded overflow-hidden">
+        <div className="h-full rounded" style={{ width: `${val * 10}%`, background: color }} />
+      </div>
+      <span className="text-gray-500 w-3 text-right">{val}</span>
+    </div>
+  );
+
+  return (
+    <div className="bg-gray-900 border border-gray-800 rounded-lg p-2.5">
+      <div className="flex items-center gap-1.5 mb-1.5">
+        <span className="text-base">👑</span>
+        <div>
+          <div className="font-semibold text-gray-100 text-xs">{ruler.name}</div>
+          <div className="text-gray-600 text-[10px]">Age {ruler.age} · {ruler.ambition.replace(/_/g, ' ')} · {ruler.traits.join(', ')}</div>
+        </div>
+      </div>
+      <div className="space-y-0.5">
+        {statBar(ruler.stats.military, 'Mil', '#ef4444')}
+        {statBar(ruler.stats.diplomacy, 'Dip', '#8b5cf6')}
+        {statBar(ruler.stats.administration, 'Adm', '#f59e0b')}
+      </div>
+    </div>
+  );
+}
+
+// ── Military Tab ──────────────────────────────────────────────
 function MilitaryTab({ armies, totalTroops, gameState }: any) {
   const armyCampaignUsed = gameState.armyCampaignUsed ?? {};
+  const queueAction = useGameStore((s) => s.queueAction);
+  const kid = gameState.playerKingdomId;
 
   return (
     <>
@@ -238,6 +329,8 @@ function MilitaryTab({ armies, totalTroops, gameState }: any) {
             const prov    = gameState.provinces[army.provinceId];
             const acted   = !!armyCampaignUsed[army.id];
             const moraleC = army.morale > 60 ? '#22c55e' : army.morale > 30 ? '#eab308' : '#ef4444';
+            const maxSize = army.maxSize ?? army.size;
+            const atMax   = army.size >= maxSize;
             return (
               <div key={army.id} className="border border-gray-800 rounded p-2 mb-1.5">
                 <div className="flex justify-between items-start">
@@ -247,7 +340,6 @@ function MilitaryTab({ armies, totalTroops, gameState }: any) {
                       className={`text-[9px] px-1 py-0.5 rounded font-bold uppercase ${
                         acted ? 'bg-gray-800 text-gray-500' : 'bg-green-900/50 text-green-400'
                       }`}
-                      title={acted ? 'Already acted this season' : 'Ready to act (costs 1 Order)'}
                     >
                       {acted ? 'Acted' : 'Ready'}
                     </span>
@@ -262,6 +354,21 @@ function MilitaryTab({ armies, totalTroops, gameState }: any) {
                 <div className="h-1 bg-gray-800 rounded mt-1.5 overflow-hidden">
                   <div className="h-full rounded" style={{ width: `${army.morale}%`, background: moraleC }} />
                 </div>
+                {/* Replenishment hint */}
+                {!atMax && prov?.owner === kid && (
+                  <div className="text-[9px] text-blue-500 mt-0.5 italic">
+                    ↑ Replenishing in {prov.name}
+                  </div>
+                )}
+                {/* Split button */}
+                {army.size >= 2000 && !acted && (
+                  <button
+                    className="mt-1.5 w-full text-[9px] py-0.5 rounded bg-gray-800 border border-gray-700 text-gray-400 hover:bg-gray-700"
+                    onClick={() => queueAction({ type: 'split_army', apCost: 0, armyId: army.id, splitFraction: 0.5 })}
+                  >
+                    ✂ Split 50/50
+                  </button>
+                )}
               </div>
             );
           })
@@ -272,11 +379,11 @@ function MilitaryTab({ armies, totalTroops, gameState }: any) {
 }
 
 // ── Diplomacy Tab ─────────────────────────────────────────────
-function DiplomacyTab({ gameState, playerKid, acceptProposal, declineProposal }: any) {
-  const inbox = (gameState.diplomaticInbox ?? []) as any[];
+function DiplomacyTab({ gameState, playerKid, acceptProposal, declineProposal, onBreachRequest }: any) {
+  const inbox = (gameState.diplomaticInbox ?? []).filter((p: any) => p.status === 'pending') as any[];
 
   const others = Object.values(gameState.kingdoms as Record<string, any>)
-    .filter((k: any) => k.id !== playerKid)
+    .filter((k: any) => k.id !== playerKid && !k.isEliminated)
     .sort((a: any, b: any) => {
       const ra = gameState.relations[playerKid]?.[a.id]?.score ?? 0;
       const rb = gameState.relations[playerKid]?.[b.id]?.score ?? 0;
@@ -292,35 +399,47 @@ function DiplomacyTab({ gameState, playerKid, acceptProposal, declineProposal }:
             <span>✉ Diplomatic Inbox</span>
             <span className="bg-purple-700 text-white rounded-full px-1 text-[8px]">{inbox.length}</span>
           </div>
+          <div className="text-[9px] text-gray-600 italic">Y = accept first · N = decline first</div>
           {inbox.map((proposal: any) => {
             const fromK = gameState.kingdoms[proposal.fromKingdomId];
             const typeLabel =
               proposal.type === 'nap_offer' ? 'NAP Offer' :
               proposal.type === 'tribute_demand' ? 'Tribute Offer' :
               'Alliance Pact';
+            const expiresIn = proposal.expiresAt - gameState.season;
             return (
               <div key={proposal.id} className="bg-gray-900 border border-purple-900/50 rounded-lg p-2.5 space-y-2">
-                <div className="flex items-center gap-1.5">
-                  <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: fromK?.color ?? '#888' }} />
-                  <span className="font-medium" style={{ color: fromK?.color ?? '#888' }}>
-                    {fromK?.name ?? proposal.fromKingdomId}
-                  </span>
-                  <span className="text-gray-600">·</span>
-                  <span className="text-purple-400 text-[10px]">{typeLabel}</span>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: fromK?.color ?? '#888' }} />
+                    <span className="font-medium" style={{ color: fromK?.color ?? '#888' }}>
+                      {fromK?.name ?? proposal.fromKingdomId}
+                    </span>
+                    <span className="text-gray-600">·</span>
+                    <span className="text-purple-400 text-[10px]">{typeLabel}</span>
+                  </div>
+                  <span className="text-gray-700 text-[9px]">expires S{proposal.expiresAt}</span>
                 </div>
+                {fromK?.ruler && (
+                  <div className="text-[9px] text-gray-600">
+                    👑 {fromK.ruler.name} · {fromK.ruler.traits.slice(0, 2).join(', ')}
+                  </div>
+                )}
                 <p className="text-gray-400 text-[11px] leading-relaxed">{proposal.terms}</p>
                 <div className="flex gap-1.5">
                   <button
                     className="flex-1 text-[10px] py-1 px-2 rounded bg-green-900/40 border border-green-700 text-green-400 hover:bg-green-900/70 transition-colors"
                     onClick={() => acceptProposal(proposal.id)}
+                    title="Accept (Y)"
                   >
-                    ✓ Accept
+                    ✓ Accept [Y]
                   </button>
                   <button
                     className="flex-1 text-[10px] py-1 px-2 rounded bg-gray-800 border border-gray-700 text-gray-400 hover:bg-gray-700 transition-colors"
                     onClick={() => declineProposal(proposal.id)}
+                    title="Decline (N)"
                   >
-                    ✕ Decline
+                    ✕ Decline [N]
                   </button>
                 </div>
               </div>
@@ -336,30 +455,46 @@ function DiplomacyTab({ gameState, playerKid, acceptProposal, declineProposal }:
           const score = rel?.score ?? 0;
           const treaty  = rel?.treaty;
           const atWar   = rel?.atWarWith;
+          const hasActiveTreaty = treaty && treaty.status === 'active';
           return (
-            <div key={k.id} className="flex items-center justify-between py-1 border-b border-gray-800 last:border-0">
-              <div className="flex items-center gap-1.5">
-                <div className={`w-2 h-2 rounded-full flex-shrink-0 ${k.isEliminated ? 'opacity-30' : ''}`} style={{ background: k.color }} />
-                <span className={`${k.isEliminated ? 'line-through text-gray-700' : 'text-gray-300'} truncate max-w-[80px]`}>
-                  {k.name}
-                </span>
+            <div key={k.id} className="py-1 border-b border-gray-800 last:border-0">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-1.5">
+                  <div className={`w-2 h-2 rounded-full flex-shrink-0 ${k.isEliminated ? 'opacity-30' : ''}`} style={{ background: k.color }} />
+                  <span className={`${k.isEliminated ? 'line-through text-gray-700' : 'text-gray-300'} truncate max-w-[80px]`}>
+                    {k.name}
+                  </span>
+                  {k.ruler && (
+                    <span className="text-gray-700 text-[9px] truncate" title={`${k.ruler.name} (${k.ruler.traits.join(', ')})`}>
+                      {k.ruler.name}
+                    </span>
+                  )}
+                </div>
+                <div className="flex items-center gap-1">
+                  {atWar && <span className="text-red-400 text-[10px]">⚔</span>}
+                  {hasActiveTreaty && treaty.type === 'nap' && (
+                    <span className="text-green-400 text-[10px]" title={`NAP expires season ${treaty.expiresAt}`}>✋</span>
+                  )}
+                  {hasActiveTreaty && treaty.type === 'tribute' && (
+                    <span className="text-blue-400 text-[10px]" title={`Tribute ${treaty.tributeAmount}g/season`}>💸</span>
+                  )}
+                  {(gameState.diplomaticInbox ?? []).some((p: any) => p.fromKingdomId === k.id && p.status === 'pending') && (
+                    <span className="text-purple-400 text-[10px]" title="Pending proposal in inbox">✉</span>
+                  )}
+                  <span className={`font-medium text-[11px] w-7 text-right ${score > 20 ? 'text-green-400' : score < -20 ? 'text-red-400' : 'text-gray-400'}`}>
+                    {score > 0 ? '+' : ''}{score}
+                  </span>
+                </div>
               </div>
-              <div className="flex items-center gap-1">
-                {atWar && <span className="text-red-400 text-[10px]">⚔</span>}
-                {treaty?.type === 'nap' && (
-                  <span className="text-green-400 text-[10px]" title={`NAP expires season ${treaty.expiresAt}`}>✋</span>
-                )}
-                {treaty?.type === 'tribute' && (
-                  <span className="text-blue-400 text-[10px]" title={`Tribute ${treaty.tributeAmount}g/season`}>💸</span>
-                )}
-                {/* Check if they have a pending inbox proposal */}
-                {(gameState.diplomaticInbox ?? []).some((p: any) => p.fromKingdomId === k.id) && (
-                  <span className="text-purple-400 text-[10px]" title="Has proposal in inbox">✉</span>
-                )}
-                <span className={`font-medium text-[11px] w-7 text-right ${score > 20 ? 'text-green-400' : score < -20 ? 'text-red-400' : 'text-gray-400'}`}>
-                  {score > 0 ? '+' : ''}{score}
-                </span>
-              </div>
+              {/* Breach button for active treaties */}
+              {hasActiveTreaty && (
+                <button
+                  className="mt-1 w-full text-[9px] py-0.5 rounded bg-red-950/30 border border-red-900/50 text-red-500 hover:bg-red-950/60 transition-colors"
+                  onClick={() => onBreachRequest(k.id)}
+                >
+                  ⚔ Breach {treaty.type === 'nap' ? 'NAP' : 'Tribute'}
+                </button>
+              )}
             </div>
           );
         })}

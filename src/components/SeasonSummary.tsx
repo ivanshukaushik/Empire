@@ -231,6 +231,23 @@ export default function SeasonSummary() {
             </CollapsibleSection>
           )}
 
+          {/* ── Succession ───────────────────────────────────── */}
+          {(summary as any).successionLines?.length > 0 && (
+            <CollapsibleSection
+              icon="👑"
+              title="Succession"
+              count={(summary as any).successionLines.length}
+              defaultOpen
+              accentColor="text-blue-300"
+            >
+              <div className="space-y-0.5">
+                {(summary as any).successionLines.map((line: string, i: number) => (
+                  <LogLine key={i} line={line} />
+                ))}
+              </div>
+            </CollapsibleSection>
+          )}
+
           {/* ── Quiet season fallback ────────────────────────── */}
           {highlights.length === 0 &&
             summary.battles.length === 0 &&

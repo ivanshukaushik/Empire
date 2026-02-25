@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { useGameStore } from '../store/gameStore';
 import MapView from './MapView';
 import KingdomInfo from './KingdomInfo';
@@ -8,6 +8,16 @@ import SeasonSummary from './SeasonSummary';
 
 const SEASON_NAMES = ['Winter', 'Spring', 'Summer', 'Autumn'];
 
+// ── Toast notification system ─────────────────────────────────
+
+interface Toast {
+  id: number;
+  message: string;
+  type: 'info' | 'success' | 'danger' | 'warning';
+}
+
+let toastId = 0;
+
 export default function GameBoard() {
   const gameState          = useGameStore((s) => s.gameState!);
   const endTurn            = useGameStore((s) => s.endTurn);
@@ -15,31 +25,76 @@ export default function GameBoard() {
   const setAction          = useGameStore((s) => s.setActionBeingPlanned);
   const setPendingMoveArmy = useGameStore((s) => s.setPendingMoveArmy);
   const dismissHelp        = useGameStore((s) => s.dismissHelp);
+  const acceptProposal     = useGameStore((s) => s.acceptProposal);
+  const declineProposal    = useGameStore((s) => s.declineProposal);
+
+  const [toasts, setToasts] = useState<Toast[]>([]);
+
+  const addToast = useCallback((message: string, type: Toast['type'] = 'info') => {
+    const id = ++toastId;
+    setToasts((prev) => [...prev.slice(-4), { id, message, type }]);
+    setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 4000);
+  }, []);
 
   const playerKingdom = gameState.kingdoms[gameState.playerKingdomId];
   const isPlanning    = gameState.phase === 'player_planning';
+
+  // Selected proposal for Y/N keyboard shortcuts
+  const firstProposal = gameState.diplomaticInbox[0] ?? null;
 
   // ── Keyboard shortcuts ─────────────────────────────────────
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (['INPUT', 'SELECT', 'TEXTAREA'].includes((e.target as HTMLElement).tagName)) return;
-      if (!isPlanning) return;
 
       const hasOrders = gameState.ordersRemaining > 0;
 
       switch (e.key.toLowerCase()) {
+        // ── Global ────────────────────────────────────────────
         case 'escape':
           setAction(null);
           break;
+
+        // ── End Season — S or Enter ───────────────────────────
+        case 's':
+          if (isPlanning) {
+            endTurn();
+            addToast('Season ended. Resolving…', 'info');
+          }
+          break;
+        case 'enter':
+          if (isPlanning) endTurn();
+          break;
+
+        // ── Military ──────────────────────────────────────────
         case 'a':
-          if (hasOrders) { setAction('attack'); setPendingMoveArmy(null); }
+          if (isPlanning && hasOrders) { setAction('attack'); setPendingMoveArmy(null); }
           break;
         case 'm':
-          if (hasOrders) { setAction('move'); setPendingMoveArmy(null); }
+          if (isPlanning && hasOrders) { setAction('move'); setPendingMoveArmy(null); }
           break;
-        case 's': {
+
+        // ── Split army ────────────────────────────────────────
+        case 'x': {
+          if (!isPlanning) break;
           const pid = gameState.selectedProvinceId;
-          if (pid && hasOrders) {
+          if (!pid) { addToast('Select a province with your army first.', 'warning'); break; }
+          const army = Object.values(gameState.armies).find(
+            (a) => a.kingdomId === gameState.playerKingdomId && a.provinceId === pid && a.size >= 2000
+          );
+          if (army) {
+            queueAction({ type: 'split_army', apCost: 0, armyId: army.id, splitFraction: 0.5 });
+          } else {
+            addToast('No eligible army here to split (need 2000+ troops).', 'warning');
+          }
+          break;
+        }
+
+        // ── Intel / scout (moved from S to I) ─────────────────
+        case 'i': {
+          if (!isPlanning || !hasOrders) break;
+          const pid = gameState.selectedProvinceId;
+          if (pid) {
             const p = gameState.provinces[pid];
             if (p && p.owner !== gameState.playerKingdomId) {
               queueAction({ type: 'espionage_scout', apCost: 1, targetProvinceId: pid });
@@ -47,7 +102,10 @@ export default function GameBoard() {
           }
           break;
         }
+
+        // ── Recruit ───────────────────────────────────────────
         case 'r': {
+          if (!isPlanning) break;
           const pid = gameState.selectedProvinceId;
           if (pid) {
             const p = gameState.provinces[pid];
@@ -57,19 +115,42 @@ export default function GameBoard() {
           }
           break;
         }
-        case 'enter':
-          endTurn();
+
+        // ── Focus selected — F: scroll to selected province ───
+        case 'f': {
+          if (gameState.selectedProvinceId) {
+            // Dispatch a custom event that MapView can listen to
+            window.dispatchEvent(new CustomEvent('focusProvince', {
+              detail: gameState.selectedProvinceId,
+            }));
+          }
           break;
+        }
+
+        // ── Diplomacy inbox: Y accept, N decline ──────────────
+        case 'y': {
+          if (firstProposal) {
+            acceptProposal(firstProposal.id);
+            addToast(`Accepted proposal from ${gameState.kingdoms[firstProposal.fromKingdomId]?.name ?? '?'}.`, 'success');
+          }
+          break;
+        }
+        case 'n': {
+          if (firstProposal) {
+            declineProposal(firstProposal.id);
+            addToast(`Declined proposal from ${gameState.kingdoms[firstProposal.fromKingdomId]?.name ?? '?'}.`, 'warning');
+          }
+          break;
+        }
       }
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [isPlanning, gameState, endTurn, setAction, setPendingMoveArmy, queueAction]);
+  }, [isPlanning, gameState, endTurn, setAction, setPendingMoveArmy, queueAction, firstProposal, acceptProposal, declineProposal, addToast]);
 
   const orders = gameState.ordersRemaining;
   const maxOrders = gameState.maxOrders;
 
-  // Recent events (last 8 from turnLog, excluding economy noise)
   const recentEvents = gameState.turnLog
     .filter((e) => e.type !== 'economy')
     .slice(-8)
@@ -89,6 +170,15 @@ export default function GameBoard() {
           {playerKingdom.name}
         </div>
         <span className="text-gray-700">·</span>
+        {/* Ruler display */}
+        {playerKingdom.ruler && (
+          <>
+            <span className="text-gray-500" title={`${playerKingdom.ruler.name} — ${playerKingdom.ruler.traits.join(', ')} · Age ${playerKingdom.ruler.age}`}>
+              👑 {playerKingdom.ruler.name}
+            </span>
+            <span className="text-gray-700">·</span>
+          </>
+        )}
         <span className="text-gray-500">{playerKingdom.archetype}</span>
         <span className="text-gray-700">·</span>
 
@@ -115,7 +205,7 @@ export default function GameBoard() {
         <div className="flex-1" />
 
         {/* Orders pips */}
-        <div className="flex gap-1 items-center" title={`${orders}/${maxOrders} Orders remaining. Campaign actions (Move, Attack, Espionage, Diplomacy, Reform) each cost 1 Order.`}>
+        <div className="flex gap-1 items-center" title={`${orders}/${maxOrders} Orders remaining. Campaign actions each cost 1. Domestic actions (Build/Recruit) are free.`}>
           {Array.from({ length: maxOrders }).map((_, i) => (
             <div
               key={i}
@@ -137,12 +227,12 @@ export default function GameBoard() {
         </span>
 
         {/* Inbox badge */}
-        {gameState.diplomaticInbox.length > 0 && (
+        {gameState.diplomaticInbox.filter((p) => p.status === 'pending').length > 0 && (
           <span
-            className="bg-purple-700 text-white text-xs px-1.5 py-0.5 rounded-full font-bold"
-            title="Diplomatic proposals await your decision"
+            className="bg-purple-700 text-white text-xs px-1.5 py-0.5 rounded-full font-bold cursor-help"
+            title="Diplomatic proposals await — check Diplomacy tab. Press Y to accept, N to decline."
           >
-            ✉ {gameState.diplomaticInbox.length}
+            ✉ {gameState.diplomaticInbox.filter((p) => p.status === 'pending').length}
           </span>
         )}
 
@@ -162,7 +252,25 @@ export default function GameBoard() {
         <div className="flex-1 min-w-0 overflow-hidden relative flex flex-col">
           <MapView className="flex-1 min-h-0" />
 
-          {/* Recent events strip — visible during planning */}
+          {/* Toast notifications overlay */}
+          {toasts.length > 0 && (
+            <div className="absolute top-2 left-1/2 -translate-x-1/2 flex flex-col gap-1.5 z-50 pointer-events-none">
+              {toasts.map((t) => (
+                <div
+                  key={t.id}
+                  className={`text-xs px-3 py-1.5 rounded-lg shadow-xl font-medium animate-pulse-once
+                    ${t.type === 'success' ? 'bg-green-900/90 text-green-300 border border-green-700'
+                    : t.type === 'danger' ? 'bg-red-900/90 text-red-300 border border-red-700'
+                    : t.type === 'warning' ? 'bg-amber-900/90 text-amber-300 border border-amber-700'
+                    : 'bg-gray-900/90 text-gray-300 border border-gray-700'}`}
+                >
+                  {t.message}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Recent events strip */}
           {isPlanning && recentEvents.length > 0 && (
             <div
               className="shrink-0 border-t border-gray-800 overflow-x-auto whitespace-nowrap"
@@ -204,21 +312,23 @@ export default function GameBoard() {
 
 function eventColor(type: string): string {
   switch (type) {
-    case 'combat': return 'text-red-400';
-    case 'diplomacy': return 'text-purple-400';
-    case 'espionage': return 'text-yellow-400';
-    case 'player': return 'text-amber-300';
-    default: return 'text-gray-500';
+    case 'combat':     return 'text-red-400';
+    case 'diplomacy':  return 'text-purple-400';
+    case 'espionage':  return 'text-yellow-400';
+    case 'player':     return 'text-amber-300';
+    case 'succession': return 'text-blue-300';
+    default:           return 'text-gray-500';
   }
 }
 
 function eventIcon(type: string): string {
   switch (type) {
-    case 'combat': return '⚔';
-    case 'diplomacy': return '✋';
-    case 'espionage': return '🔍';
-    case 'player': return '▶';
-    default: return '·';
+    case 'combat':     return '⚔';
+    case 'diplomacy':  return '✋';
+    case 'espionage':  return '🔍';
+    case 'player':     return '▶';
+    case 'succession': return '👑';
+    default:           return '·';
   }
 }
 
@@ -229,12 +339,16 @@ function HelpOverlay({ onDismiss }: { onDismiss: () => void }) {
         <h2 className="text-xl font-bold gold mb-1">How to Play</h2>
         <p className="text-xs text-gray-500 mb-4">Ancient Warring States — 475 BCE</p>
         <div className="space-y-3 text-sm text-gray-300">
-          <HelpRow icon="📋" label="Orders system" desc="You have 2 Orders per season for campaign actions: Move, Attack, Espionage, Diplomacy, Reform. Build and Recruit are free domestic actions (one per province per season)." />
+          <HelpRow icon="📋" label="Orders system" desc="2 Orders per season for campaign actions: Attack, Move, Espionage, Diplomacy, Reform, Levy. Build and Recruit are free domestic actions (once per province per season)." />
           <HelpRow icon="⚔" label="Attack (A)" desc="Press A, click your army's province, then hover an enemy province to see odds. Click to attack." />
           <HelpRow icon="⇒" label="Move (M)" desc="Press M, click your army's province, then click a friendly adjacent province." />
-          <HelpRow icon="🏗" label="Build & Recruit (B/R)" desc="Select your province in the right panel or action bar. Free — no Orders needed, but only once per province per season." />
-          <HelpRow icon="✉" label="Diplomacy inbox" desc="AI kingdoms may send proposals (NAP offers, tribute, pacts). Check the purple badge on the top bar." />
-          <HelpRow icon="▶" label="End Season (Enter)" desc="AI kingdoms act, combat resolves, economy updates. Your Orders and all slots reset." />
+          <HelpRow icon="✂" label="Split Army (X)" desc="Split selected army 50/50 into two groups — useful for multi-front operations." />
+          <HelpRow icon="👥" label="Levy (L)" desc="Emergency manpower from a province. Costs gold and stability, has a 4-season cooldown." />
+          <HelpRow icon="🏗" label="Build & Recruit (R)" desc="Select your province in the right panel. Free — no Orders needed." />
+          <HelpRow icon="✉" label="Diplomacy inbox (Y/N)" desc="AI kingdoms send proposals. Press Y to accept the first one, N to decline. Or use the Diplomacy tab." />
+          <HelpRow icon="⚔" label="Breach treaties" desc="You can break any active NAP or tribute in the Diplomacy tab. Severe reputation penalty." />
+          <HelpRow icon="👑" label="Rulers" desc="Each kingdom has a ruler with military/diplomacy/admin stats. Rulers age and may die — their successor changes the kingdom's strategy." />
+          <HelpRow icon="▶" label="End Season (S or Enter)" desc="AI acts, economy updates, rulers may die. Your Orders reset." />
           <div className="border-t border-gray-800 pt-3 text-gray-500 text-xs">
             <strong className="text-gray-400">Win:</strong> Control 60% of provinces (24+) or capture 3 enemy capitals. &nbsp;
             <strong className="text-gray-400">Lose:</strong> Your capital is captured or stability hits 0.

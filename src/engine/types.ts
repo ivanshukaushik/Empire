@@ -12,9 +12,38 @@ export type PersonalityTrait =
   | 'paranoid'
   | 'mercantile';
 
+// ── Ruler system ──────────────────────────────────────────────
+export type RulerTrait = PersonalityTrait | 'reformist' | 'ambitious' | 'cunning';
+export type RulerAmbition = 'unify' | 'survive' | 'dominate_trade' | 'revenge' | 'reform';
+
+export interface RulerStats {
+  military: number;        // 1–10 → +combatModifier bonus up to +10%
+  diplomacy: number;       // 1–10 → +diplomacyModifier bonus up to +20%
+  administration: number;  // 1–10 → +incomeModifier bonus up to +10%
+}
+
+export interface Ruler {
+  id: string;
+  name: string;
+  age: number;              // years old (ages 1/year = every 4 seasons)
+  traits: RulerTrait[];
+  ambition: RulerAmbition;
+  stats: RulerStats;
+  reignStartSeason: number;
+}
+
+export interface RulerSuccessionEvent {
+  season: number;
+  kingdomId: string;
+  deceasedName: string;
+  newRuler: Ruler;
+  message: string;
+}
+
 export type StrategicGoal = 'expand' | 'consolidate' | 'survive' | 'hegemon';
 
 export type TreatyType = 'nap' | 'tribute';
+export type TreatyStatus = 'active' | 'breached' | 'expired';
 
 export type ActionType =
   | 'build'
@@ -26,7 +55,10 @@ export type ActionType =
   | 'espionage_scout'
   | 'espionage_sabotage'
   | 'espionage_incite'
-  | 'reform';
+  | 'reform'
+  | 'levy'
+  | 'split_army'
+  | 'breach_treaty';
 
 export type BuildingType = 'farm' | 'market' | 'barracks' | 'fort';
 
@@ -56,6 +88,8 @@ export interface Province {
   hasMarket: boolean;
   hasBarracks: boolean;
   hasSpyNetwork: boolean;
+  /** Season when levy becomes available again (undefined = always available) */
+  levyCooldownUntil?: number;
   x: number;
   y: number;
 }
@@ -67,6 +101,8 @@ export interface Army {
   size: number;
   morale: number; // 0–100
   name: string;
+  /** Soft cap for auto-replenishment (set to peak size after recruiting) */
+  maxSize?: number;
 }
 
 export interface AIPersonality {
@@ -106,6 +142,10 @@ export interface Kingdom {
   bonusDescription: string;
   weaknessDescription: string;
   archetype: string;
+  /** Current ruler */
+  ruler?: Ruler;
+  /** How many times this kingdom has broken treaties (affects AI trust) */
+  treatyBreachCount: number;
 }
 
 export interface RelationData {
@@ -117,9 +157,12 @@ export interface RelationData {
 
 export interface Treaty {
   type: TreatyType;
+  /** Track treaty health */
+  status: TreatyStatus;
   expiresAt: number; // −1 = permanent; else season number
   tributeAmount?: number;
   parties: [string, string];
+  signedAt: number; // season signed
 }
 
 export interface FogOfWarEntry {
@@ -133,7 +176,7 @@ export interface FogOfWarEntry {
 
 export interface LogEntry {
   season: number;
-  type: 'combat' | 'economy' | 'diplomacy' | 'espionage' | 'event' | 'player' | 'ai';
+  type: 'combat' | 'economy' | 'diplomacy' | 'espionage' | 'event' | 'player' | 'ai' | 'succession';
   message: string;
   kingdomId?: string;
 }
@@ -150,7 +193,9 @@ export interface PlayerAction {
   buildingType?: BuildingType;
   reform?: ReformType;
   tributeAmount?: number;
-  recruitAmount?: number; // manpower points to spend
+  recruitAmount?: number;   // manpower points to spend
+  levyAmount?: number;      // manpower points to levy
+  splitFraction?: number;   // 0.25 | 0.5 | 0.75 for split_army
 }
 
 export interface BattleResult {
@@ -179,14 +224,18 @@ export interface SeasonSummary {
   economyLines: string[];
   diplomaticLines: string[];
   espionageLines: string[];
+  successionLines: string[];
   winCheck: { winner: string; reason: string } | null;
 }
+
+export type DiploProposalType = 'nap_offer' | 'tribute_demand' | 'mutual_target';
+export type DiploProposalStatus = 'pending' | 'accepted' | 'declined' | 'expired';
 
 /** Inbound diplomacy proposal from an AI kingdom to the player */
 export interface DiploProposal {
   id: string;
   fromKingdomId: string;
-  type: 'nap_offer' | 'tribute_demand' | 'mutual_target';
+  type: DiploProposalType;
   /** Human-readable description of the proposal and its terms */
   terms: string;
   /** The kingdom being targeted (for mutual_target pacts) */
@@ -195,6 +244,10 @@ export interface DiploProposal {
   tributeAmount?: number;
   /** Season the proposal was generated */
   season: number;
+  /** Season at which this proposal expires if not acted on */
+  expiresAt: number;
+  /** Lifecycle status — only 'pending' proposals appear in the inbox */
+  status: DiploProposalStatus;
 }
 
 export type GamePhase =
@@ -202,6 +255,13 @@ export type GamePhase =
   | 'executing'
   | 'season_summary'
   | 'game_over';
+
+export interface ToastMessage {
+  id: string;
+  message: string;
+  type: 'info' | 'warning' | 'success' | 'danger';
+  expiresAt: number; // timestamp ms
+}
 
 export interface GameState {
   seed: number;
@@ -214,20 +274,10 @@ export interface GameState {
   relations: Record<string, Record<string, RelationData>>;
   playerKingdomId: string;
 
-  // ── Orders system (replaces flat AP) ──────────────────────
-  /** Orders remaining this season. Campaign actions each cost 1. */
+  // ── Orders system ──────────────────────────────────────────
   ordersRemaining: number;
-  /** Maximum orders per season (default 2; grows with reforms or events). */
   maxOrders: number;
-  /**
-   * Tracks which provinces have already used their ONE domestic action
-   * (Build or Recruit) this season. Resets at the start of each season.
-   */
   provinceDomesticUsed: Record<string, boolean>;
-  /**
-   * Tracks which armies have already used their ONE campaign action
-   * (Move or Attack) this season. Resets at the start of each season.
-   */
   armyCampaignUsed: Record<string, boolean>;
 
   pendingPlayerActions: PlayerAction[];
@@ -239,9 +289,15 @@ export interface GameState {
   loseReason: string | null;
   selectedProvinceId: string | null;
   actionBeingPlanned: ActionType | null;
-  pendingMoveArmyId: string | null; // ID of the army being moved or attacking
-  helpSeen: boolean; // has the player dismissed the first-play help overlay
+  pendingMoveArmyId: string | null;
+  helpSeen: boolean;
 
   /** Inbound diplomacy proposals from AI kingdoms, awaiting player decision */
   diplomaticInbox: DiploProposal[];
+
+  /** Ruler succession events from last season (shown in summary) */
+  rulerEvents: RulerSuccessionEvent[];
+
+  /** Transient toast messages for the map overlay */
+  toastMessages: ToastMessage[];
 }
