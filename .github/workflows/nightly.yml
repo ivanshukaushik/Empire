@@ -1,0 +1,56 @@
+name: Nightly Build Status
+
+on:
+  schedule:
+    # Run at 02:00 UTC every day
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+jobs:
+  nightly-check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: claude/ancient-warring-states-game-Ipull
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      - name: Report build status
+        run: |
+          echo "=== Nightly Build Report ===" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Date:** $(date -u '+%Y-%m-%d %H:%M UTC')" >> $GITHUB_STEP_SUMMARY
+          echo "**Branch:** claude/ancient-warring-states-game-Ipull" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Build Output" >> $GITHUB_STEP_SUMMARY
+          if [ -d "dist" ]; then
+            SIZE=$(du -sh dist | cut -f1)
+            FILES=$(find dist -type f | wc -l)
+            echo "- Output dir: \`dist/\`" >> $GITHUB_STEP_SUMMARY
+            echo "- Total size: $SIZE" >> $GITHUB_STEP_SUMMARY
+            echo "- File count: $FILES" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### TODO Summary" >> $GITHUB_STEP_SUMMARY
+          if [ -f "TODO.md" ]; then
+            grep -E '^\- \[ \]' TODO.md | head -10 >> $GITHUB_STEP_SUMMARY || echo "No open tasks found" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "No TODO.md found" >> $GITHUB_STEP_SUMMARY
+          fi

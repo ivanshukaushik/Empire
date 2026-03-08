@@ -1,11 +1,13 @@
 # Ancient Warring States
 
-A turn-based strategy game set in ancient China's Warring States period (475 BCE).
+A real-time grand strategy game set in ancient China's Warring States period (475 BCE).
 Control one of 8 rival kingdoms and conquer the Central Plains.
+
+**Play online:** https://ivanshukaushik.github.io/Empire/
 
 ---
 
-## How to Run
+## Quick Start (local dev)
 
 **Requirements:** Node.js 18+
 
@@ -15,12 +17,29 @@ npm install
 
 # Start development server
 npm run dev
-# Then open http://localhost:5173 in your browser
+# Open http://localhost:5173
+
+# Run tests
+npm test
 
 # Build for production
 npm run build
+
+# Preview production build locally
 npm run preview
 ```
+
+Automatic deployment to GitHub Pages runs on every push to the `claude/ancient-warring-states-game-Ipull` branch via GitHub Actions (see `.github/workflows/deploy.yml`).
+
+---
+
+## Design
+
+See [DESIGN.md](DESIGN.md) for the full game design document covering:
+- Core loop and simulation model
+- Economy, combat, and diplomacy systems
+- Intent control layer (command box)
+- Strategic resources and natural constraints
 
 ---
 

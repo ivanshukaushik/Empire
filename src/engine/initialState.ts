@@ -49,7 +49,7 @@ export function createInitialState(seed: number, playerKingdomId: string): GameS
       population: def.baseManpower * 100,
       // Part E: Admin & Strategic Resources
       adminCost: def.isCapital ? 2 : 1,
-      hasHorses: false,
+      hasHorses: def.hasHorses ?? false,
     };
   }
 

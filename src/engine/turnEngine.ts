@@ -316,7 +316,8 @@ export function applyPlayerAction(
     case 'move': {
       const army = newArmies[action.armyId!];
       const targetProv = newProvinces[action.targetProvinceId!];
-      const travelDays = computeTravelDays(targetProv.terrain, newState.season);
+      const hasHorsesMove = Object.values(newProvinces).some((p) => p.owner === kid && p.hasHorses);
+      const travelDays = computeTravelDays(targetProv.terrain, newState.season, hasHorsesMove);
       const mv: ArmyMovement = {
         armyId:           action.armyId!,
         fromProvinceId:   army.provinceId,
@@ -341,7 +342,8 @@ export function applyPlayerAction(
     case 'attack': {
       const army = newArmies[action.armyId!];
       const targetProv = newProvinces[action.targetProvinceId!];
-      const travelDays = computeTravelDays(targetProv.terrain, newState.season);
+      const hasHorsesAtk = Object.values(newProvinces).some((p) => p.owner === kid && p.hasHorses);
+      const travelDays = computeTravelDays(targetProv.terrain, newState.season, hasHorsesAtk);
       const mv: ArmyMovement = {
         armyId:           action.armyId!,
         fromProvinceId:   army.provinceId,

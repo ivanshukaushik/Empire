@@ -714,12 +714,20 @@ function ProvinceHoverTooltip({
         )}
 
         {/* Travel ETA for valid move/attack targets */}
-        {isValidTarget && (isAttackMode || isMoveMode) && (
-          <div className="border-t border-amber-900/50 pt-1.5 text-amber-700 text-[10px]">
-            Travel time: <span className="text-amber-400 font-medium">{computeTravelDays(p.terrain, gameState.season)} days</span>
-            <span className="ml-1 capitalize">({p.terrain})</span>
-          </div>
-        )}
+        {isValidTarget && (isAttackMode || isMoveMode) && (() => {
+          const provs: Province[] = Object.values(gameState.provinces);
+          const playerHasHorses = provs.some(
+            (pr) => pr.owner === gameState.playerKingdomId && pr.hasHorses
+          );
+          const eta = computeTravelDays(p.terrain, gameState.season, playerHasHorses);
+          return (
+            <div className="border-t border-amber-900/50 pt-1.5 text-amber-700 text-[10px]">
+              Travel time: <span className="text-amber-400 font-medium">{eta} days</span>
+              <span className="ml-1 capitalize">({p.terrain})</span>
+              {playerHasHorses && <span className="ml-1 text-amber-600">🐴 −1d</span>}
+            </div>
+          );
+        })()}
 
         {isAttackMode && !isValidTarget && (
           <div className="text-red-700 text-[10px] italic border-t border-amber-900/50 pt-1">

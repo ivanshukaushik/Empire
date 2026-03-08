@@ -13,14 +13,14 @@ export const PROVINCE_DEFS: Omit<
   { id: 'qin1', name: 'Yongcheng',  isCapital: false, terrain: 'hills',      adjacentTo: ['qin2','qin3','qin4'],              baseFood: 2, baseIncome: 2, baseManpower: 3, hasIron: false, hasSalt: false, x: 130, y: 360 },
   { id: 'qin2', name: 'Xianyang',   isCapital: true,  terrain: 'plains',     adjacentTo: ['qin1','qin4','qin5','han3'],        baseFood: 3, baseIncome: 3, baseManpower: 4, hasIron: false, hasSalt: false, x: 185, y: 310 },
   { id: 'qin3', name: 'Hanzhong',   isCapital: false, terrain: 'mountains',  adjacentTo: ['qin1','han2','han4'],               baseFood: 2, baseIncome: 1, baseManpower: 2, hasIron: true,  hasSalt: false, x: 160, y: 450 },
-  { id: 'qin4', name: 'Longxi',     isCapital: false, terrain: 'hills',      adjacentTo: ['qin1','qin2','qin5'],              baseFood: 2, baseIncome: 2, baseManpower: 3, hasIron: false, hasSalt: false, x: 100, y: 295 },
+  { id: 'qin4', name: 'Longxi',     isCapital: false, terrain: 'hills',      adjacentTo: ['qin1','qin2','qin5'],              baseFood: 2, baseIncome: 2, baseManpower: 3, hasIron: false, hasSalt: false, hasHorses: true,  x: 100, y: 295 },
   { id: 'qin5', name: 'Beidi',      isCapital: false, terrain: 'plains',     adjacentTo: ['qin2','qin4','zha3'],              baseFood: 2, baseIncome: 2, baseManpower: 3, hasIron: false, hasSalt: false, x: 155, y: 240 },
 
   // ── ZHAO (Cavalry Lords) ── North-central
   { id: 'zha1', name: 'Handan',    isCapital: true,  terrain: 'plains',     adjacentTo: ['zha2','wei3','zsh3'],              baseFood: 4, baseIncome: 4, baseManpower: 5, hasIron: false, hasSalt: false, x: 350, y: 370 },
   { id: 'zha2', name: 'Jinyang',   isCapital: false, terrain: 'hills',      adjacentTo: ['zha1','zha3','zha4','wei2'],       baseFood: 3, baseIncome: 3, baseManpower: 4, hasIron: true,  hasSalt: false, x: 280, y: 300 },
-  { id: 'zha3', name: 'Yunzhong',  isCapital: false, terrain: 'plains',     adjacentTo: ['zha2','zha5','qin5','zsh5'],       baseFood: 3, baseIncome: 2, baseManpower: 4, hasIron: false, hasSalt: false, x: 215, y: 225 },
-  { id: 'zha4', name: 'Dai',       isCapital: false, terrain: 'hills',      adjacentTo: ['zha2','zha5','yan3','zsh5'],       baseFood: 2, baseIncome: 2, baseManpower: 3, hasIron: false, hasSalt: false, x: 300, y: 195 },
+  { id: 'zha3', name: 'Yunzhong',  isCapital: false, terrain: 'plains',     adjacentTo: ['zha2','zha5','qin5','zsh5'],       baseFood: 3, baseIncome: 2, baseManpower: 4, hasIron: false, hasSalt: false, hasHorses: true,  x: 215, y: 225 },
+  { id: 'zha4', name: 'Dai',       isCapital: false, terrain: 'hills',      adjacentTo: ['zha2','zha5','yan3','zsh5'],       baseFood: 2, baseIncome: 2, baseManpower: 3, hasIron: false, hasSalt: false, hasHorses: true,  x: 300, y: 195 },
   { id: 'zha5', name: 'Yanmen',    isCapital: false, terrain: 'mountains',  adjacentTo: ['zha3','zha4'],                     baseFood: 1, baseIncome: 2, baseManpower: 3, hasIron: false, hasSalt: false, x: 230, y: 155 },
 
   // ── YAN (Spymasters) ── Northeast

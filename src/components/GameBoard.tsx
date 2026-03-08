@@ -6,6 +6,7 @@ import ProvinceInfo from './ProvinceInfo';
 import ActionBar from './ActionBar';
 import SeasonSummary from './SeasonSummary';
 import WarLedger from './WarLedger';
+import CommandBox from './CommandBox';
 
 const SEASON_NAMES = ['Winter', 'Spring', 'Summer', 'Autumn'];
 
@@ -84,6 +85,7 @@ export default function GameBoard() {
 
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [showLedger, setShowLedger] = useState(false);
+  const [showCommand, setShowCommand] = useState(false);
 
   const addToast = useCallback((message: string, type: Toast['type'] = 'info') => {
     const id = ++toastId;
@@ -108,6 +110,13 @@ export default function GameBoard() {
       );
 
       switch (e.key) {
+        // ── Command box — C ────────────────────────────────────
+        case 'c':
+        case 'C':
+          e.preventDefault();
+          setShowCommand((v) => !v);
+          break;
+
         // ── Pause / resume — Space ─────────────────────────────
         case ' ':
           e.preventDefault();
@@ -310,6 +319,19 @@ export default function GameBoard() {
           <span className="text-yellow-400 font-medium">⏸ Paused</span>
         )}
 
+        {/* Command box toggle */}
+        <button
+          className={`text-xs px-2 py-0.5 rounded border transition-colors ${
+            showCommand
+              ? 'bg-amber-900/50 border-amber-700 text-amber-300'
+              : 'bg-gray-900 border-gray-700 text-gray-500 hover:text-gray-300'
+          }`}
+          onClick={() => setShowCommand((v) => !v)}
+          title="Command box — type intent commands (C)"
+        >
+          ⌘ Command
+        </button>
+
         {/* War Ledger toggle */}
         <button
           className={`text-xs px-2 py-0.5 rounded border transition-colors ${
@@ -391,6 +413,11 @@ export default function GameBoard() {
 
       {/* Season summary modal */}
       <SeasonSummary />
+
+      {/* Command box overlay */}
+      {showCommand && (
+        <CommandBox onClose={() => setShowCommand(false)} />
+      )}
 
       {/* First-play help overlay */}
       {!gameState.helpSeen && (

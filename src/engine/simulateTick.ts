@@ -50,10 +50,12 @@ export const TERRAIN_TRAVEL_DAYS: Record<string, number> = {
 
 // ── Travel-time helper ───────────────────────────────────────
 
-export function computeTravelDays(terrain: string, season: number): number {
+export function computeTravelDays(terrain: string, season: number, hasHorsesBonus = false): number {
   const base = TERRAIN_TRAVEL_DAYS[terrain] ?? 4;
   const winterMult = (season % 4) === 0 ? 1.5 : 1.0; // season%4==0 is winter
-  return Math.max(1, Math.round(base * winterMult));
+  const raw = Math.round(base * winterMult);
+  // Strategic resource: horses → −1 travel day (minimum 1)
+  return Math.max(1, raw - (hasHorsesBonus ? 1 : 0));
 }
 
 // ── Main tick function ───────────────────────────────────────
@@ -349,7 +351,8 @@ function applyAIAction(
       if (army.kingdomId !== kingdomId) break;
       if (targetProv.owner === kingdomId) break; // already ours
 
-      const travelDays = computeTravelDays(targetProv.terrain, s.season);
+      const hasHorses = Object.values(s.provinces).some((p) => p.owner === kingdomId && p.hasHorses);
+      const travelDays = computeTravelDays(targetProv.terrain, s.season, hasHorses);
       const mv: ArmyMovement = {
         armyId,
         fromProvinceId:   army.provinceId,
@@ -372,7 +375,8 @@ function applyAIAction(
       if (!army || !targetProv) break;
       if (army.kingdomId !== kingdomId) break;
 
-      const travelDays = computeTravelDays(targetProv.terrain, s.season);
+      const hasHorsesMove = Object.values(s.provinces).some((p) => p.owner === kingdomId && p.hasHorses);
+      const travelDays = computeTravelDays(targetProv.terrain, s.season, hasHorsesMove);
       const mv: ArmyMovement = {
         armyId,
         fromProvinceId:   army.provinceId,

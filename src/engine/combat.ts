@@ -54,12 +54,19 @@ export function resolveBattle(
   const zhaoPlainsBonus =
     order.attackerKingdomId === 'zhao' && terrain === 'plains' ? 1.15 : 1.0;
 
+  // Strategic resource: iron → +8% attack power for controlling kingdom
+  const atkKingdomOwnsIron = Object.values(state.provinces).some(
+    (p) => p.owner === order.attackerKingdomId && p.hasIron
+  );
+  const ironAtkBonus = atkKingdomOwnsIron ? 1.08 : 1.0;
+
   const atkPower =
     army.size *
     (army.morale / 100) *
     atkTerrainMod *
     attackerKingdom.combatModifier *
     zhaoPlainsBonus *
+    ironAtkBonus *
     seasonMod *
     rollFloat(rng, 0.85, 1.15);
 
