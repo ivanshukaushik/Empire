@@ -1,0 +1,54 @@
+name: Auto-Improve
+
+on:
+  schedule:
+    # Every Sunday at 03:00 UTC (after nightly.yml at 02:00)
+    - cron: '0 3 * * 0'
+  workflow_dispatch:
+
+jobs:
+  auto-improve:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: claude/ancient-warring-states-game-Ipull
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate improvement via Claude API
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python3 .github/scripts/auto_improve.py
+
+      - name: Run tests
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --staged --quiet; then
+            echo "No changes generated — nothing to commit."
+            exit 0
+          fi
+          TASK=$(cat .auto_improve_task.txt 2>/dev/null || echo "auto improvement")
+          rm -f .auto_improve_task.txt
+          git commit -m "auto: $TASK"
+          git push -u origin claude/ancient-warring-states-game-Ipull
