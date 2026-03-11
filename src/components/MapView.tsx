@@ -45,6 +45,13 @@ const ODDS_COLOR: Record<OddsRating, string> = {
   desperate:    '#ef4444',
 };
 
+/** Map a win% to a green/yellow/red stroke color for province outlines. */
+function forecastStrokeColor(winPct: number): string {
+  if (winPct > 65) return '#22c55e';   // green  — favorable
+  if (winPct >= 40) return '#eab308';  // yellow — uncertain
+  return '#ef4444';                    // red    — dangerous
+}
+
 // Terrain-based tint overlaid on province circles (subtle, behind ownership color)
 const TERRAIN_TINT: Record<string, string> = {
   plains:     'rgba(210,180,100,0.12)',
@@ -115,6 +122,17 @@ export default function MapView({ className = '' }: Props) {
     if (!validTargetIds.has(hoveredId)) return null;
     return previewCombat(pendingMoveArmyId, hoveredId, gameState);
   }, [actionBeingPlanned, pendingMoveArmyId, hoveredId, validTargetIds, gameState]);
+
+  // Win-chance map for all valid attack targets — drives province outline coloring.
+  const forecastMap = useMemo(() => {
+    const map = new Map<string, number>();
+    if (actionBeingPlanned !== 'attack' || !pendingMoveArmyId) return map;
+    for (const pid of validTargetIds) {
+      const p = previewCombat(pendingMoveArmyId, pid, gameState);
+      if (p) map.set(pid, p.winChancePct);
+    }
+    return map;
+  }, [actionBeingPlanned, pendingMoveArmyId, validTargetIds, gameState]);
 
   const handleMouseMove = useCallback((e: React.MouseEvent<SVGSVGElement>) => {
     const rect = svgRef.current?.getBoundingClientRect();
@@ -374,7 +392,9 @@ export default function MapView({ className = '' }: Props) {
           if (isArmySrc) {
             strokeColor = '#60A5FA'; strokeWidth = 2.5; glowColor = '#3B82F6';
           } else if (isValidTgt && actionBeingPlanned === 'attack') {
-            strokeColor = '#EF4444'; strokeWidth = 2.5; glowColor = '#DC2626';
+            const winPct = forecastMap.get(p.id);
+            strokeColor = winPct !== undefined ? forecastStrokeColor(winPct) : '#EF4444';
+            strokeWidth = 2.5; glowColor = strokeColor;
           } else if (isValidTgt && actionBeingPlanned === 'move') {
             strokeColor = '#22C55E'; strokeWidth = 2; glowColor = '#16A34A';
           } else if (isStep1) {
@@ -628,8 +648,9 @@ function ProvinceHoverTooltip({
 
   const armies = (Object.values(gameState.armies) as any[]).filter((a) => a.provinceId === provinceId && a.size > 0);
 
-  const tooltipW = 220;
-  const tooltipH = 170;
+  const showForecast = isAttackMode && isValidTarget && !!combatPreview;
+  const tooltipW = showForecast ? 262 : 220;
+  const tooltipH = showForecast ? 240 : 170;
   let tx = mousePos.x + 14;
   let ty = mousePos.y - 10;
   const containerW = 820;
@@ -689,27 +710,68 @@ function ProvinceHoverTooltip({
           </div>
         )}
 
-        {/* Combat preview */}
+        {/* ── Battle Forecast Panel ── */}
         {isAttackMode && isValidTarget && combatPreview && (
-          <div className="border-t border-amber-900/50 pt-1.5 space-y-1">
+          <div className="border-t border-amber-900/50 pt-1.5 space-y-1.5">
+            {/* Header */}
             <div className="flex items-center justify-between">
-              <span className="text-amber-700">Battle odds</span>
-              <span className="font-bold capitalize" style={{ color: ODDS_COLOR[combatPreview.odds] }}>
-                {combatPreview.odds} ({combatPreview.winChancePct}%)
+              <span className="text-amber-500 font-semibold text-[11px] tracking-wide">⚔ Battle Forecast</span>
+              <span
+                className="font-bold capitalize text-[11px]"
+                style={{ color: ODDS_COLOR[combatPreview.odds] }}
+              >
+                {combatPreview.winChancePct}% win
               </span>
             </div>
-            <div className="flex justify-between text-amber-800">
-              <span>Your power</span>
-              <span className="text-amber-300">{Math.round(combatPreview.attackerPowerBase).toLocaleString()}</span>
+
+            {/* Attacker row */}
+            <div className="grid grid-cols-2 gap-x-2 text-[10px]">
+              <span className="text-amber-700">Your troops</span>
+              <span className="text-amber-200 text-right">{combatPreview.attackerStrength.toLocaleString()}</span>
+              <span className="text-amber-700">Morale</span>
+              <span className="text-amber-200 text-right">{Math.round(combatPreview.modifiers.moraleFactor * 100)}%</span>
+              <span className="text-amber-700">Atk power</span>
+              <span className="text-amber-200 text-right">{Math.round(combatPreview.attackerPowerBase).toLocaleString()}</span>
             </div>
-            <div className="flex justify-between text-amber-800">
-              <span>Enemy power</span>
-              <span className="text-amber-300">{Math.round(combatPreview.defenderPowerBase).toLocaleString()}</span>
+
+            {/* Divider */}
+            <div className="border-t border-amber-900/30" />
+
+            {/* Defender row */}
+            <div className="grid grid-cols-2 gap-x-2 text-[10px]">
+              <span className="text-amber-700">Enemy troops</span>
+              <span className="text-amber-200 text-right">{combatPreview.defenderStrength.toLocaleString()}</span>
+              <span className="text-amber-700">Def power</span>
+              <span className="text-amber-200 text-right">{Math.round(combatPreview.defenderPowerBase).toLocaleString()}</span>
             </div>
-            {combatPreview.terrainNote && (
-              <div className="text-yellow-600 text-[10px]">{combatPreview.terrainNote}</div>
+
+            {/* Divider */}
+            <div className="border-t border-amber-900/30" />
+
+            {/* Estimated losses */}
+            <div className="grid grid-cols-2 gap-x-2 text-[10px]">
+              <span className="text-amber-700">Your losses</span>
+              <span className="text-right" style={{ color: ODDS_COLOR[combatPreview.odds] }}>
+                ~{combatPreview.attackerLossLow.toLocaleString()}–{combatPreview.attackerLossHigh.toLocaleString()}
+              </span>
+              <span className="text-amber-700">Enemy losses</span>
+              <span className="text-amber-300 text-right">
+                ~{combatPreview.defenderLossLow.toLocaleString()}–{combatPreview.defenderLossHigh.toLocaleString()}
+              </span>
+            </div>
+
+            {/* Modifier notes */}
+            {(combatPreview.terrainNote || combatPreview.seasonNote) && (
+              <div className="text-yellow-700 text-[10px] leading-tight">
+                {[combatPreview.terrainNote, combatPreview.seasonNote].filter(Boolean).join(' · ')}
+              </div>
             )}
-            <div className="text-amber-800 text-[10px] italic">Click to commit to battle</div>
+
+            {/* Tooltip explanation */}
+            <div className="text-amber-900 text-[9px] italic border-t border-amber-900/30 pt-1">
+              Forecast based on troop counts, terrain, fortifications, and morale.
+            </div>
+            <div className="text-amber-800 text-[10px]">Click to commit to battle</div>
           </div>
         )}
 

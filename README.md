@@ -199,6 +199,28 @@ Breaking treaties is a drastic option — use it only when survival demands it o
 
 ---
 
+### Combat Forecast System
+
+Before committing to an attack you can preview the expected outcome. While in **Attack mode** with an army selected:
+
+- **Hover any valid target province** — a **Battle Forecast** panel appears in the tooltip showing:
+  - Your troop count and morale
+  - Enemy garrison and defending armies
+  - Deterministic attack / defense power (RNG factor = 1.0)
+  - Estimated win chance (%)
+  - Estimated losses (your range and enemy range)
+  - Active modifiers: terrain, fort level, season, iron bonus, Zhao cavalry
+
+- **Province outline colours** on the map indicate forecast difficulty at a glance:
+  - **Green** → >65% win chance — favourable
+  - **Yellow** → 40–65% win chance — uncertain
+  - **Red** → <40% win chance — dangerous
+
+> Forecast uses the exact same formulas as the real battle engine (`combat.ts`), with the random ±15% band held at 1.0 for the base estimate.
+> The actual battle rolls an additional ±15% modifier — a "Favored" forecast can still lose on a bad roll.
+
+---
+
 ### Combat
 
 When you attack:
@@ -300,6 +322,13 @@ Only 1 active reform at a time. Costs 1 Order to enact.
 ---
 
 ## Changelog
+
+### V2.1 — Battle Forecast System
+
+- **Deterministic battle forecast**: hovering an enemy province in Attack mode shows a full **Battle Forecast** panel with win chance, troop counts, power comparison, and estimated losses.
+- **Province outline colouring**: valid attack targets turn **green** (>65% win), **yellow** (40–65%), or **red** (<40%) based on the forecast — readable at a glance without opening the tooltip.
+- **Iron bonus fix**: the `+8% attack` iron province bonus was missing from the preview engine; it now matches `combat.ts` exactly.
+- **Modifier breakdown**: the forecast exposes every factor (terrain, fort, season, iron, Zhao cavalry, morale, combatModifier) for transparency.
 
 ### V2.0 — Rulers, Breach Mechanics, Levy & Army Splitting
 
