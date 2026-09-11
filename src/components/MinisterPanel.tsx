@@ -13,6 +13,20 @@ const ROLE_ICONS: Record<string, string> = {
   spymaster:  '🕵',
 };
 
+const ACTION_LABELS: Record<string, string> = {
+  recruit:            'Recruiting troops',
+  move:               'Moving army',
+  attack:             'Ordering attack',
+  levy:               'Raising levy',
+  split_army:         'Splitting army',
+  build:              'Ordering construction',
+  espionage_scout:    'Dispatching scouts',
+  espionage_sabotage: 'Sending saboteurs',
+  espionage_incite:   'Inciting unrest',
+  diplomacy_nap:      'Sending envoy',
+  diplomacy_tribute:  'Offering tribute',
+};
+
 const ROLE_LABELS: Record<string, string> = {
   chancellor: 'Chancellor',
   general:    'Supreme General',
@@ -113,8 +127,13 @@ function AudienceModal({ minister, onClose, onRaiseSuspicion, onLowerSuspicion }
     setLoading(true);
     try {
       await consultMinister(minister.id, msg);
-    } catch {
-      setError('The minister did not respond. (Check that the server is running.)');
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (msg.includes('not valid')) {
+        setError(`Minister tried to act but the action wasn't valid in the current game state.`);
+      } else {
+        setError('The minister did not respond. (Is the server running on port 3001?)');
+      }
     } finally {
       setLoading(false);
     }

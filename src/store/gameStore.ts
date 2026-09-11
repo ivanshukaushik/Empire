@@ -399,10 +399,59 @@ export const useGameStore = create<GameStore>()(
         relations[gameState.kingdoms[k]?.name ?? k] = r.score;
       }
 
+      // Owned provinces
+      const ownedProvinces = Object.values(gameState.provinces)
+        .filter(p => p.owner === kid)
+        .map(p => ({
+          id: p.id, name: p.name, terrain: p.terrain,
+          isCapital: p.isCapital, owner: p.owner, ownerName: kingdom.name,
+          hasFarm: p.hasFarm, hasMarket: p.hasMarket, hasBarracks: p.hasBarracks,
+          fortLevel: p.fortLevel, adjacentEnemies: p.adjacentTo.filter(a => gameState.provinces[a]?.owner !== kid),
+        }));
+
+      // Border provinces (enemy provinces adjacent to our territory)
+      const borderProvinceIds = new Set<string>();
+      ownedProvinces.forEach(p => p.adjacentEnemies.forEach(id => borderProvinceIds.add(id)));
+      const borderProvinces = [...borderProvinceIds].map(id => {
+        const p = gameState.provinces[id];
+        const fog = gameState.fogOfWar[id];
+        const ownerK = gameState.kingdoms[p.owner];
+        return {
+          id: p.id, name: p.name, terrain: p.terrain, isCapital: p.isCapital,
+          owner: p.owner, ownerName: ownerK?.name ?? p.owner,
+          garrison: (fog?.partial || fog?.scouted) ? p.garrison : undefined,
+          hasFarm: p.hasFarm, hasMarket: p.hasMarket, hasBarracks: p.hasBarracks,
+          fortLevel: p.fortLevel, adjacentEnemies: [],
+        };
+      });
+
+      // Known enemy provinces from scouting
+      const knownEnemyProvinces = Object.values(gameState.provinces)
+        .filter(p => p.owner !== kid && (gameState.fogOfWar[p.id]?.scouted || gameState.fogOfWar[p.id]?.partial))
+        .map(p => ({
+          id: p.id, name: p.name, terrain: p.terrain, isCapital: p.isCapital,
+          owner: p.owner, ownerName: gameState.kingdoms[p.owner]?.name ?? p.owner,
+          garrison: p.garrison, hasFarm: p.hasFarm, hasMarket: p.hasMarket,
+          hasBarracks: p.hasBarracks, fortLevel: p.fortLevel, adjacentEnemies: [],
+        }));
+
+      // Army info
+      const armyInfos = armies.map(a => ({
+        id: a.id, name: a.name, size: a.size, morale: a.morale,
+        provinceId: a.provinceId,
+        provinceName: gameState.provinces[a.provinceId]?.name ?? a.provinceId,
+        isMarching: !!gameState.activeMovements?.[a.id],
+      }));
+
+      const allKingdoms: Record<string, string> = {};
+      Object.values(gameState.kingdoms).forEach(k => { allKingdoms[k.id] = k.name; });
+
       const gameContext = {
         kingdomName: kingdom.name,
+        kingdomId: kid,
         treasury: kingdom.treasury,
         stability: kingdom.stability,
+        manpower: kingdom.manpower,
         season: gameState.season,
         year: gameState.year,
         totalTroops,
@@ -410,6 +459,11 @@ export const useGameStore = create<GameStore>()(
         recentEvents,
         activeWars,
         relations,
+        armies: armyInfos,
+        ownedProvinces,
+        borderProvinces,
+        knownEnemyProvinces,
+        allKingdoms,
       };
 
       const history = minister.conversationHistory.map((m) => ({
@@ -439,10 +493,36 @@ export const useGameStore = create<GameStore>()(
       if (!res.ok) throw new Error('Server error');
       const data = await res.json();
       const response: string = data.response;
+      const actionData = data.action as {
+        type: string; provinceId?: string; targetProvinceId?: string;
+        armyId?: string; targetKingdomId?: string; buildingType?: string;
+        recruitAmount?: number; tributeAmount?: number;
+      } | null;
+
+      // Execute the minister's action if one was returned
+      if (actionData?.type) {
+        const action: Omit<PlayerAction, 'id'> = {
+          type: actionData.type as PlayerAction['type'],
+          apCost: 1,
+          provinceId:       actionData.provinceId,
+          targetProvinceId: actionData.targetProvinceId,
+          armyId:           actionData.armyId,
+          targetKingdomId:  actionData.targetKingdomId,
+          buildingType:     actionData.buildingType as PlayerAction['buildingType'],
+          recruitAmount:    actionData.recruitAmount,
+          tributeAmount:    actionData.tributeAmount,
+        };
+        // Use queueAction directly on current state
+        get().queueAction(action);
+      }
 
       const now = Date.now();
       const userMsg: MinisterMessage  = { role: 'user',      content: message,  timestamp: now };
       const asstMsg: MinisterMessage  = { role: 'assistant', content: response, timestamp: now + 1 };
+
+      const actionLabel = actionData?.type
+        ? `${minister.name} is acting: ${actionData.type.replace(/_/g, ' ')}`
+        : null;
 
       set((draft) => {
         if (!draft.gameState) return;
@@ -452,6 +532,8 @@ export const useGameStore = create<GameStore>()(
           ms[idx].conversationHistory.push(userMsg, asstMsg);
         }
       });
+
+      if (actionLabel) set({ actionFeedback: actionLabel });
 
       return response;
     },

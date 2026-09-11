@@ -31,8 +31,8 @@ app.post('/api/minister/consult', async (req, res) => {
       return;
     }
 
-    const response = await consultMinister(minister, gameContext, message, history ?? []);
-    res.json({ response });
+    const result = await consultMinister(minister, gameContext, message, history ?? []);
+    res.json({ response: result.dialogue, action: result.action, silentlyRefused: result.silentlyRefused });
   } catch (err: unknown) {
     console.error('[minister/consult]', err);
     res.status(500).json({ error: 'The minister could not be reached.' });
