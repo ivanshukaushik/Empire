@@ -5,17 +5,23 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "server": "tsx server/index.ts",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "test": "vitest run"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.125.0",
+    "cors": "^2.8.6",
+    "express": "^5.2.1",
     "immer": "^10.0.3",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "zustand": "^4.4.7"
   },
   "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
     "@types/react": "^18.2.0",
     "@types/react-dom": "^18.2.0",
     "@vitejs/plugin-react": "^4.2.1",
@@ -23,6 +29,7 @@
     "jsdom": "^28.1.0",
     "postcss": "^8.4.33",
     "tailwindcss": "^3.4.1",
+    "tsx": "^4.23.13",
     "typescript": "^5.3.3",
     "vite": "^5.0.12",
     "vitest": "^1.2.0"

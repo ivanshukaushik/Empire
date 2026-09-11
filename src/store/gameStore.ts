@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { immer } from 'zustand/middleware/immer';
-import { GameState, PlayerAction, ActionType, DiploProposal } from '../engine/types';
+import { GameState, PlayerAction, ActionType, DiploProposal, Minister, MinisterMessage } from '../engine/types';
 import { createInitialState } from '../engine/initialState';
 import { validateAction, applyPlayerAction, isCampaignAction } from '../engine/turnEngine';
 import { createRng } from '../engine/rng';
@@ -34,6 +34,10 @@ interface GameStore {
   acceptProposal:       (proposalId: string) => void;
   declineProposal:      (proposalId: string) => void;
   breachTreatyWith:     (targetKingdomId: string) => void;
+  /** Send a message to a minister and get their LLM response. Returns response text or throws. */
+  consultMinister:      (ministerId: string, message: string) => Promise<string>;
+  /** Raise or lower player suspicion of a minister (clamped 0–100) */
+  setMinisterSuspicion: (ministerId: string, delta: number) => void;
 }
 
 const SAVE_KEY = 'warring-states-v4-save';
@@ -364,6 +368,101 @@ export const useGameStore = create<GameStore>()(
           }],
         },
         actionFeedback: message,
+      });
+    },
+
+    consultMinister: async (ministerId, message) => {
+      const { gameState } = get();
+      if (!gameState) throw new Error('No game state');
+
+      const kid = gameState.playerKingdomId;
+      const ministers = gameState.ministers[kid] ?? [];
+      const minister = ministers.find((m) => m.id === ministerId);
+      if (!minister) throw new Error('Minister not found');
+
+      const kingdom = gameState.kingdoms[kid];
+      const armies  = Object.values(gameState.armies).filter((a) => a.kingdomId === kid);
+      const totalTroops = armies.reduce((s, a) => s + a.size, 0);
+
+      const activeWars = Object.entries(gameState.relations[kid] ?? {})
+        .filter(([, r]) => r.atWarWith)
+        .map(([k]) => gameState.kingdoms[k]?.name ?? k);
+
+      const threats = Object.entries(gameState.relations[kid] ?? {})
+        .filter(([, r]) => r.score < -30)
+        .map(([k]) => `${gameState.kingdoms[k]?.name ?? k} (hostile)`);
+
+      const recentEvents = gameState.turnLog.slice(-8).map((e) => e.message);
+
+      const relations: Record<string, number> = {};
+      for (const [k, r] of Object.entries(gameState.relations[kid] ?? {})) {
+        relations[gameState.kingdoms[k]?.name ?? k] = r.score;
+      }
+
+      const gameContext = {
+        kingdomName: kingdom.name,
+        treasury: kingdom.treasury,
+        stability: kingdom.stability,
+        season: gameState.season,
+        year: gameState.year,
+        totalTroops,
+        threats,
+        recentEvents,
+        activeWars,
+        relations,
+      };
+
+      const history = minister.conversationHistory.map((m) => ({
+        role: m.role,
+        content: m.content,
+      }));
+
+      const res = await fetch('/api/minister/consult', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          minister: {
+            id: minister.id,
+            name: minister.name,
+            role: minister.role,
+            personality: minister.personality,
+            age: minister.age,
+            competence: minister.competence,
+            hidden: minister.hidden,
+          },
+          gameContext,
+          message,
+          history,
+        }),
+      });
+
+      if (!res.ok) throw new Error('Server error');
+      const data = await res.json();
+      const response: string = data.response;
+
+      const now = Date.now();
+      const userMsg: MinisterMessage  = { role: 'user',      content: message,  timestamp: now };
+      const asstMsg: MinisterMessage  = { role: 'assistant', content: response, timestamp: now + 1 };
+
+      set((draft) => {
+        if (!draft.gameState) return;
+        const ms = draft.gameState.ministers[kid];
+        const idx = ms.findIndex((m: Minister) => m.id === ministerId);
+        if (idx >= 0) {
+          ms[idx].conversationHistory.push(userMsg, asstMsg);
+        }
+      });
+
+      return response;
+    },
+
+    setMinisterSuspicion: (ministerId, delta) => {
+      set((draft) => {
+        if (!draft.gameState) return;
+        const kid = draft.gameState.playerKingdomId;
+        const ms  = draft.gameState.ministers[kid];
+        const m   = ms?.find((x: Minister) => x.id === ministerId);
+        if (m) m.suspicion = Math.max(0, Math.min(100, m.suspicion + delta));
       });
     },
   }))

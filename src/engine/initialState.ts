@@ -15,6 +15,7 @@ import {
 } from '../data/gameData';
 import { DEFAULT_MAX_ORDERS } from '../config';
 import { generateRuler } from './ruler';
+import { generateMinisters } from './ministerData';
 
 // ============================================================
 // BUILD INITIAL GAME STATE
@@ -107,6 +108,12 @@ export function createInitialState(seed: number, playerKingdomId: string): GameS
     nextAiPlanAtDays[kid] = i * 2; // stagger 2 days apart so they don't all fire at day 0
   });
 
+  // Generate ministers for all kingdoms
+  const ministers: Record<string, ReturnType<typeof generateMinisters>> = {};
+  for (const kid of allKingdomIds) {
+    ministers[kid] = generateMinisters(kid, allKingdomIds, rng);
+  }
+
   const state: GameState = {
     seed,
     season: 1,
@@ -144,6 +151,7 @@ export function createInitialState(seed: number, playerKingdomId: string): GameS
     recentBattles:    [],
     lastEconomyAtDays: 0,
     warLedger:        [],
+    ministers,
   };
 
   return state;

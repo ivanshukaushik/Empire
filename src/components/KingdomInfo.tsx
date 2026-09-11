@@ -5,8 +5,9 @@ import { provinceIncome, provinceFood, provinceManpower, computeRates } from '..
 import { StatTooltip } from './Tooltip';
 import { BREACH_CONSEQUENCES } from '../engine/diplomacy';
 import type { Ruler } from '../engine/types';
+import { MinisterPanel } from './MinisterPanel';
 
-type Tab = 'overview' | 'military' | 'diplomacy';
+type Tab = 'overview' | 'military' | 'diplomacy' | 'court';
 
 export default function KingdomInfo() {
   const gameState          = useGameStore((s) => s.gameState!);
@@ -70,7 +71,7 @@ export default function KingdomInfo() {
 
       {/* Tabs */}
       <div className="flex border-b border-gray-800 shrink-0">
-        {(['overview', 'military', 'diplomacy'] as Tab[]).map((t) => (
+        {(['overview', 'military', 'diplomacy', 'court'] as Tab[]).map((t) => (
           <button
             key={t}
             className={`flex-1 py-1.5 text-[10px] uppercase tracking-wider transition-colors relative ${
@@ -122,6 +123,7 @@ export default function KingdomInfo() {
             onBreachRequest={(targetKid: string) => setConfirmBreach(targetKid)}
           />
         )}
+        {tab === 'court' && <MinisterPanel />}
       </div>
 
       {/* Footer controls */}

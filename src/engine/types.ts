@@ -12,6 +12,57 @@ export type PersonalityTrait =
   | 'paranoid'
   | 'mercantile';
 
+// ── Minister system ───────────────────────────────────────────
+
+export type MinisterRole = 'chancellor' | 'general' | 'treasurer' | 'spymaster';
+
+export type MinisterPersonality =
+  | 'loyal'
+  | 'ambitious'
+  | 'cunning'
+  | 'fearful'
+  | 'honorable'
+  | 'greedy'
+  | 'paranoid'
+  | 'idealistic';
+
+export interface MinisterHiddenState {
+  /** 0 = actively plotting against you, 100 = completely devoted */
+  trueLoyalty: number;
+  /** What they secretly want or who they serve */
+  hiddenAgenda: string;
+  /** Kingdom ID that has bribed/turned them, or null */
+  foreignFaction: string | null;
+  /** How far along their plot is: 0=passive, 1=watching, 2=building, 3=ready */
+  plotStage: 0 | 1 | 2 | 3;
+  /** IDs of other ministers they are conspiring with */
+  secretAllies: string[];
+}
+
+export interface MinisterMessage {
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: number;
+}
+
+export interface Minister {
+  id: string;
+  name: string;
+  role: MinisterRole;
+  personality: MinisterPersonality[];
+  age: number;
+  /** How skilled they are at their role (1–10). Affects advice quality. */
+  competence: number;
+  /** Apparent loyalty shown to the player (0–100). May differ from trueLoyalty. */
+  displayedLoyalty: number;
+  /** Player's manually tracked suspicion level (0–100). Affects their demeanor. */
+  suspicion: number;
+  /** Hidden state — never shown directly in UI */
+  hidden: MinisterHiddenState;
+  /** Conversation history with this minister */
+  conversationHistory: MinisterMessage[];
+}
+
 // ── Ruler system ──────────────────────────────────────────────
 export type RulerTrait = PersonalityTrait | 'reformist' | 'ambitious' | 'cunning';
 export type RulerAmbition = 'unify' | 'survive' | 'dominate_trade' | 'revenge' | 'reform';
@@ -384,4 +435,7 @@ export interface GameState {
   lastEconomyAtDays: number;
   /** Persistent event feed — last 100 notable events. */
   warLedger?: LedgerEvent[];
+
+  /** Ministers for each kingdom, keyed by kingdom ID */
+  ministers: Record<string, Minister[]>;
 }
